@@ -10,7 +10,43 @@ import {
 } from "cloudflare:workers";
 import { expectTypeOf } from "expect-type";
 
-class BoringClass {}
+type TestType = {
+  fieldString: string;
+  fieldCallback: (p: string) => number;
+  fieldBasicMap: Map<string, number>;
+  fieldComplexMap: Map<
+    string,
+    {
+      fieldString: string;
+      fieldCallback: (p: string) => number;
+    }
+  >;
+  fieldSet: Set<string>;
+  fieldSubLevel: {
+    fieldString: string;
+    fieldCallback: (p: string) => number;
+  };
+};
+
+interface ABasicInterface {
+  fieldString: string;
+  fieldCallback: (p: string) => number;
+}
+
+interface TestInterface extends ABasicInterface {
+  fieldBasicMap: Map<string, number>;
+  fieldComplexMap: Map<string, ABasicInterface>;
+  fieldSet: Set<string>;
+  fieldSubLevelInline: {
+    fieldString: string;
+    fieldCallback: (p: string) => number;
+  };
+  fieldSubLevelInterface: ABasicInterface;
+}
+
+interface NonSerializableInterface {
+  field: ReadableStream<string>;
+}
 
 class TestCounter extends RpcTarget {
   constructor(private val = 0) {
@@ -181,14 +217,62 @@ class TestEntrypoint extends WorkerEntrypoint<Env> {
       Object: { a: { b: new TestCounter() } },
     };
   }
-  get nonSerializable1() {
-    return new BoringClass();
+
+  methodReturnsTypeObject(): TestType {
+    return {
+      fieldString: "a",
+      fieldCallback: (p: string) => 1,
+      fieldBasicMap: new Map([["b", 2]]),
+      fieldComplexMap: new Map([
+        [
+          "c",
+          {
+            fieldString: "d",
+            fieldCallback: (p: string) => 3,
+          },
+        ],
+      ]),
+      fieldSet: new Set(["e"]),
+      fieldSubLevel: {
+        fieldString: "f",
+        fieldCallback: (p: string) => 4,
+      },
+    };
+  }
+  methodReturnsInterfaceObject(): TestInterface {
+    return {
+      fieldString: "a",
+      fieldCallback: (p: string) => 1,
+      fieldBasicMap: new Map([["b", 2]]),
+      fieldComplexMap: new Map([
+        [
+          "c",
+          {
+            fieldString: "d",
+            fieldCallback: (p: string) => 3,
+          },
+        ],
+      ]),
+      fieldSet: new Set(["e"]),
+      fieldSubLevelInline: {
+        fieldString: "f",
+        fieldCallback: (p: string) => 4,
+      },
+      fieldSubLevelInterface: {
+        fieldString: "e",
+        fieldCallback: (p: string) => 5,
+      },
+    };
+  }
+
+  nonSerializable1() {
+    return new ReadableStream<string>();
   }
   nonSerializable2() {
-    return { a: new BoringClass() };
+    return { field: new ReadableStream<string>() };
   }
-  async nonSerializable3() {
-    return new ReadableStream<string>();
+  nonSerializable3(): NonSerializableInterface {
+    return { field: new ReadableStream<string>() };
   }
 
   [Symbol.dispose]() {
@@ -219,6 +303,27 @@ class TestObject extends DurableObject {
 
   [Symbol.dispose]() {
     console.log("Disposing");
+  }
+}
+
+class TestAlarmObject extends DurableObject {
+  // Can declare alarm method consuming optional alarmInfo parameter
+  async alarm(alarmInfo?: AlarmInvocationInfo) {
+    if (alarmInfo !== undefined) {
+      const _isRetry: boolean = alarmInfo.isRetry;
+      const _retryCount: number = alarmInfo.retryCount;
+    }
+  }
+
+  // User code can invoke alarm() directly, if desired.
+  async runAlarmVoid(): Promise<void> {
+    return await this.alarm();
+  }
+  async runAlarmInfo(): Promise<void> {
+    return await this.alarm({
+      isRetry: true,
+      retryCount: 1,
+    });
   }
 }
 
@@ -267,6 +372,7 @@ interface Env {
 
   REGULAR_OBJECT: DurableObjectNamespace;
   RPC_OBJECT: DurableObjectNamespace<TestObject>;
+  ALARM_OBJECT: DurableObjectNamespace<TestAlarmObject>;
   NAUGHTY_OBJECT: DurableObjectNamespace<TestNaughtyObject>;
   // @ts-expect-error `BoringClass` isn't an RPC capable type
   __INVALID_OBJECT_1: DurableObjectNamespace<BoringClass>;
@@ -303,7 +409,7 @@ export default <ExportedHandler<Env>>{
     // `toEqualTypeOf(...)` will fail if the function signature doesn't match *exactly*)
     {
       expectTypeOf(env.RPC_SERVICE.fetch).toEqualTypeOf<
-        (input: RequestInfo, init?: RequestInit) => Promise<Response>
+        (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
       >();
       expectTypeOf(env.RPC_SERVICE.connect).toEqualTypeOf<
         (address: SocketAddress | string, options?: SocketOptions) => Socket
@@ -320,7 +426,7 @@ export default <ExportedHandler<Env>>{
 
       const stub = env.RPC_OBJECT.get(env.RPC_OBJECT.newUniqueId());
       expectTypeOf(stub.fetch).toEqualTypeOf<
-        (input: RequestInfo, init?: RequestInit) => Promise<Response>
+        (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
       >();
       expectTypeOf(stub.connect).toEqualTypeOf<
         (address: SocketAddress | string, options?: SocketOptions) => Socket
@@ -440,7 +546,66 @@ export default <ExportedHandler<Env>>{
       expectTypeOf(s.objectProperty.z(false)).toEqualTypeOf<Promise<number>>(); // (pipelining)
 
       expectTypeOf(s.everySerializable).not.toBeNever();
-      expectTypeOf(s.nonSerializable1).toBeNever();
+
+      // Verify serializable composite objects defined with "type" keyword
+      const oType = await s.methodReturnsTypeObject();
+      expectTypeOf(oType).not.toBeNever();
+      expectTypeOf(oType.fieldString).toEqualTypeOf<string>();
+      expectTypeOf(oType.fieldCallback).toEqualTypeOf<
+        RpcStub<(p: string) => number>
+      >(); // stubified
+      expectTypeOf(oType.fieldBasicMap).toEqualTypeOf<Map<string, number>>();
+      expectTypeOf(oType.fieldComplexMap).toEqualTypeOf<
+        Map<
+          string,
+          {
+            fieldString: string;
+            fieldCallback: RpcStub<(p: string) => number>; // stubified
+          }
+        >
+      >();
+      expectTypeOf(oType.fieldSet).toEqualTypeOf<Set<string>>();
+      expectTypeOf(oType.fieldSubLevel.fieldString).toEqualTypeOf<string>();
+      expectTypeOf(oType.fieldSubLevel.fieldCallback).toEqualTypeOf<
+        RpcStub<(p: string) => number>
+      >(); // stubified
+
+      // Verify serializable composite objects defined with "inteface" keyword
+      const oInterface = await s.methodReturnsInterfaceObject();
+      expectTypeOf(oInterface).not.toBeNever();
+      expectTypeOf(oInterface.fieldString).toEqualTypeOf<string>();
+      expectTypeOf(oInterface.fieldCallback).toEqualTypeOf<
+        RpcStub<(p: string) => number>
+      >(); // stubified
+      expectTypeOf(oInterface.fieldBasicMap).toEqualTypeOf<
+        Map<string, number>
+      >();
+      expectTypeOf(oInterface.fieldComplexMap).toEqualTypeOf<
+        Map<
+          string,
+          {
+            fieldString: string;
+            fieldCallback: RpcStub<(p: string) => number>; // stubified
+          }
+        >
+      >();
+      expectTypeOf(oInterface.fieldSet).toEqualTypeOf<Set<string>>();
+      expectTypeOf(
+        oInterface.fieldSubLevelInline.fieldString
+      ).toEqualTypeOf<string>();
+      expectTypeOf(oInterface.fieldSubLevelInline.fieldCallback).toEqualTypeOf<
+        RpcStub<(p: string) => number>
+      >(); // stubified
+      expectTypeOf(
+        oInterface.fieldSubLevelInterface.fieldString
+      ).toEqualTypeOf<string>();
+      expectTypeOf(
+        oInterface.fieldSubLevelInterface.fieldCallback
+      ).toEqualTypeOf<RpcStub<(p: string) => number>>(); // stubified
+
+      expectTypeOf(s.nonSerializable1).returns.toBeNever();
+      // Note: Since one of the object's members is non-serializable,
+      //   the entire object is resolved as 'never'.
       expectTypeOf(s.nonSerializable2).returns.toBeNever();
       expectTypeOf(s.nonSerializable3).returns.toBeNever();
 

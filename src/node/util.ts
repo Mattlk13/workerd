@@ -7,6 +7,7 @@
 
 import { default as internalTypes } from 'node-internal:internal_types';
 import { default as utilImpl } from 'node-internal:util';
+import { isDeepStrictEqual as _isDeepStrictEqual } from 'node-internal:internal_comparisons';
 
 import {
   validateFunction,
@@ -14,16 +15,11 @@ import {
   validateObject,
 } from 'node-internal:validators';
 
-import {
-  debuglog,
-} from 'node-internal:debuglog';
+import { debuglog } from 'node-internal:debuglog';
 export const debug = debuglog;
 export { debuglog };
 
-import {
-  ERR_FALSY_VALUE_REJECTION,
-  ERR_INVALID_ARG_TYPE,
-} from 'node-internal:internal_errors';
+import { ERR_INVALID_ARG_TYPE } from 'node-internal:internal_errors';
 
 import {
   inspect,
@@ -31,57 +27,13 @@ import {
   formatWithOptions,
   stripVTControlCharacters,
 } from 'node-internal:internal_inspect';
-export {
-  inspect,
-  format,
-  formatWithOptions,
-  stripVTControlCharacters,
-};
 
+import { callbackify } from 'node-internal:internal_utils';
+export { inspect, format, formatWithOptions, stripVTControlCharacters };
+export { callbackify } from 'node-internal:internal_utils';
 export const types = internalTypes;
 
-export const {
-  MIMEParams,
-  MIMEType,
-} = utilImpl;
-
-const callbackifyOnRejected = (reason: unknown, cb : Function) => {
-  if (!reason) {
-    reason = new ERR_FALSY_VALUE_REJECTION(`${reason}`);
-  }
-  return cb(reason);
-};
-
-export function callbackify
-    <T extends (...args: any[]) => Promise<any>>(original: T):
-    T extends (...args: infer TArgs) => Promise<infer TReturn> ? (...params: [...TArgs, (err: Error, ret: TReturn) => any]) => void : never {
-  validateFunction(original, 'original');
-
-  function callbackified(this: unknown,
-                         ...args: [...unknown[],
-                         (err: unknown, ret: unknown) => void]) : any {
-    const maybeCb = args.pop();
-    validateFunction(maybeCb, 'last argument');
-    const cb = (maybeCb as Function).bind(this);
-    Reflect.apply(original, this, args)
-      .then((ret: any) => queueMicrotask(() => cb(null, ret)),
-            (rej: any) => queueMicrotask(() => callbackifyOnRejected(rej, cb)));
-  }
-
-  const descriptors = Object.getOwnPropertyDescriptors(original);
-  if (typeof descriptors['length']!.value === 'number') {
-    descriptors['length']!.value++;
-  }
-  if (typeof descriptors['name']!.value === 'string') {
-    descriptors['name']!.value += 'Callbackified';
-  }
-  const propertiesValues = Object.values(descriptors);
-  for (let i = 0; i < propertiesValues.length; i++) {
-    Object.setPrototypeOf(propertiesValues[i], null);
-  }
-  Object.defineProperties(callbackified, descriptors);
-  return callbackified as any;
-}
+export const { MIMEParams, MIMEType } = utilImpl;
 
 const kCustomPromisifiedSymbol = Symbol.for('nodejs.util.promisify.custom');
 const kCustomPromisifyArgsSymbol = Symbol('customPromisifyArgs');
@@ -99,7 +51,7 @@ export function promisify(original: Function): Function {
       value: fn,
       enumerable: false,
       writable: false,
-      configurable: true
+      configurable: true,
     });
   }
 
@@ -132,7 +84,7 @@ export function promisify(original: Function): Function {
     value: fn,
     enumerable: false,
     writable: false,
-    configurable: true
+    configurable: true,
   });
 
   const descriptors = Object.getOwnPropertyDescriptors(original);
@@ -148,7 +100,6 @@ export function promisify(original: Function): Function {
 promisify.custom = kCustomPromisifiedSymbol;
 
 export function inherits(ctor: Function, superCtor: Function) {
-
   if (ctor === undefined || ctor === null)
     throw new ERR_INVALID_ARG_TYPE('ctor', 'Function', ctor);
 
@@ -156,13 +107,16 @@ export function inherits(ctor: Function, superCtor: Function) {
     throw new ERR_INVALID_ARG_TYPE('superCtor', 'Function', superCtor);
 
   if (superCtor.prototype === undefined) {
-    throw new ERR_INVALID_ARG_TYPE('superCtor.prototype',
-                                   'Object', superCtor.prototype);
+    throw new ERR_INVALID_ARG_TYPE(
+      'superCtor.prototype',
+      'Object',
+      superCtor.prototype
+    );
   }
   Object.defineProperty(ctor, 'super_', {
     value: superCtor,
     writable: true,
-    configurable: true
+    configurable: true,
   });
   Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
 }
@@ -182,42 +136,40 @@ export function _extend(target: Object, source: Object) {
 export const TextDecoder = globalThis.TextDecoder;
 export const TextEncoder = globalThis.TextEncoder;
 
-export function toUSVString(input : any) {
-  // TODO(cleanup): Apparently the typescript types for this aren't available yet?
-  return (`${input}` as any).toWellFormed();
+export function toUSVString(input: any) {
+  return input.toWellFormed();
 }
 
-function pad(n: any) : string {
+function pad(n: any): string {
   return `${n}`.padStart(2, '0');
 }
 
+// prettier-ignore
 const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep',
                 'Oct', 'Nov', 'Dec'];
 
-function timestamp() : string {
+function timestamp(): string {
   const d = new Date();
-  const t = [
-    pad(d.getHours()),
-    pad(d.getMinutes()),
-    pad(d.getSeconds()),
-  ].join(':');
+  const t = [pad(d.getHours()), pad(d.getMinutes()), pad(d.getSeconds())].join(
+    ':'
+  );
   return `${d.getDate()} ${months[d.getMonth()]} ${t}`;
 }
 
-export function log(...args : any[]) {
+export function log(...args: any[]) {
   console.log('%s - %s', timestamp(), format(...args));
 }
 
-export function parseArgs(..._ : any[]) : any {
+export function parseArgs(..._: any[]): any {
   // We currently have no plans to implement the util.parseArgs API.
   throw new Error('node:util parseArgs is not implemented');
 }
 
-export function transferableAbortController(..._ : any[]) : any {
+export function transferableAbortController(..._: any[]): any {
   throw new Error('node:util transferableAbortController is not implemented');
 }
 
-export function transferableAbortSignal(..._ : any[]) : any {
+export function transferableAbortSignal(..._: any[]): any {
   throw new Error('node:util transferableAbortSignal is not implemented');
 }
 
@@ -231,20 +183,42 @@ export async function aborted(signal: AbortSignal, resource: object) {
   // this additional option. Unfortunately Node.js does not make this argument optional.
   // We'll just ignore it.
   validateAbortSignal(signal, 'signal');
-  validateObject(resource, 'resource', { allowArray: true, allowFunction: true });
+  validateObject(resource, 'resource', {
+    allowArray: true,
+    allowFunction: true,
+  });
   if (signal.aborted) return Promise.resolve();
-  // TODO(cleanup): Apparently withResolvers isn't part of type defs we use yet
-  const { promise, resolve } = (Promise as any).withResolvers();
+  const { promise, resolve } = Promise.withResolvers();
   const opts = { __proto__: null, once: true };
   signal.addEventListener('abort', resolve, opts);
   return promise;
 }
 
-export function deprecate(fn: Function, _1?: string, _2?: string, _3? : boolean) {
+export function deprecate(
+  fn: Function,
+  _1?: string,
+  _2?: string,
+  _3?: boolean
+) {
   // TODO(soon): Node.js's implementation wraps the given function in a new function that
   // logs a warning to the console if the function is called. Do we want to support that?
   // For now, we're just going to silently return the input method unmodified.
   return fn;
+}
+
+// Node.js originally introduced the API with the name `getCallSite()` as an experimental
+// API but then renamed it to `getCallSites()` soon after. We had already implemented the
+// API with the original name in a release. To avoid the possibility of breaking, we export
+// the function using both names.
+export const getCallSite = utilImpl.getCallSites.bind(utilImpl);
+export const getCallSites = utilImpl.getCallSites.bind(utilImpl);
+
+export function isDeepStrictEqual(a: unknown, b: unknown): boolean {
+  return _isDeepStrictEqual(a, b);
+}
+
+export function isArray(a: unknown): boolean {
+  return Array.isArray(a);
 }
 
 export default {
@@ -275,18 +249,25 @@ export default {
   parseArgs,
   transferableAbortController,
   transferableAbortSignal,
+  getCallSite,
+  getCallSites,
+  isDeepStrictEqual,
+  isArray,
 };
 
 // Node.js util APIs we're currently not supporting
+//
+// The following functions doesn't make sense for Workerd to support in runtime.
 //   * util._errnoException
 //   * util._exceptionWithHostPort
 //   * util.getSystemErrorMap
 //   * util.getSystemErrorName
-//   * util.isArray
+//   * util.parseEnv
+// The following functions are removed from Node.js, and only supported using
+// a polyfill.
 //   * util.isBoolean
 //   * util.isBuffer
 //   * util.isDate
-//   * util.isDeepStrictEqual
 //   * util.isError
 //   * util.isFunction
 //   * util.isNull
@@ -298,3 +279,5 @@ export default {
 //   * util.isString
 //   * util.isSymbol
 //   * util.isUndefined
+// TODO:
+//   * util.styleText

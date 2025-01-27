@@ -3,12 +3,14 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 #include "analytics-engine.h"
+
+#include <workerd/api/analytics-engine.capnp.h>
 #include <workerd/io/io-context.h>
 
 namespace workerd::api {
 
-void AnalyticsEngine::writeDataPoint(jsg::Lock& js,
-    jsg::Optional<api::AnalyticsEngine::AnalyticsEngineEvent> event) {
+void AnalyticsEngine::writeDataPoint(
+    jsg::Lock& js, jsg::Optional<api::AnalyticsEngine::AnalyticsEngineEvent> event) {
   auto& context = IoContext::current();
 
   context.getLimitEnforcer().newAnalyticsEngineRequest();

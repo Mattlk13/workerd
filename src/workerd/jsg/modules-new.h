@@ -5,16 +5,18 @@
 #pragma once
 
 #include <workerd/jsg/jsg.h>
-#include <workerd/jsg/observer.h>
 #include <workerd/jsg/modules.capnp.h>
+#include <workerd/jsg/observer.h>
 #include <workerd/jsg/url.h>
 #include <workerd/jsg/util.h>
+
+#include <v8.h>
+
 #include <kj/common.h>
 #include <kj/function.h>
-#include <kj/refcount.h>
 #include <kj/map.h>
+#include <kj/refcount.h>
 #include <kj/table.h>
-#include <v8.h>
 
 namespace workerd::jsg::modules {
 
@@ -160,7 +162,7 @@ struct ResolveContext final {
 // The Module class itself represents the definition of a module and not
 // it's actual instantiation.
 class Module {
-public:
+ public:
   enum class Type : uint8_t {
     BUNDLE,
     BUILTIN,
@@ -168,7 +170,7 @@ public:
     FALLBACK,
   };
 
-  enum class Flags: uint8_t {
+  enum class Flags : uint8_t {
     NONE = 0,
     // A Module with the MAIN flag set would specify import.meta.main = true.
     // This is generally only suitable for worker-bundle entry point modules,
@@ -189,16 +191,18 @@ public:
   // Modules that have the Flag::EVAL set will have their evaluation deferred
   // to this callback.
   using EvalCallback = Function<jsg::Promise<Value>(
-      const Module& module,
-      v8::Local<v8::Module> v8Module,
-      const CompilationObserver& observer)>;
+      const Module& module, v8::Local<v8::Module> v8Module, const CompilationObserver& observer)>;
 
   KJ_DISALLOW_COPY_AND_MOVE(Module);
   virtual ~Module() = default;
 
   // The fully resolved absolute import specifier URL for the module.
-  inline const Url& specifier() const KJ_LIFETIMEBOUND { return specifier_; }
-  inline Type type() const { return type_; }
+  inline const Url& specifier() const KJ_LIFETIMEBOUND {
+    return specifier_;
+  }
+  inline Type type() const {
+    return type_;
+  }
 
   // If isEsm() returns false the implication is that the module is a synthetic module
   bool isEsm() const;
@@ -215,19 +219,16 @@ public:
   // maybe is empty, then an exception should have been scheduled on the isolate
   // via the lock. Do not throw C++ exceptions from this method unless they are fatal.
   virtual v8::MaybeLocal<v8::Module> getDescriptor(
-      Lock& js,
-      const CompilationObserver& observer) const KJ_WARN_UNUSED_RESULT = 0;
+      Lock& js, const CompilationObserver& observer) const KJ_WARN_UNUSED_RESULT = 0;
 
   // Determines if this module can be resolved in the given context.
-  virtual bool evaluateContext(const ResolveContext& context) const
-      KJ_WARN_UNUSED_RESULT;
+  virtual bool evaluateContext(const ResolveContext& context) const KJ_WARN_UNUSED_RESULT;
 
   // Instantiates the given module. The return value follows the established v8
   // rules for Maybe. If the returned maybe is empty, then an exception should
   // have been scheduled on the isolate via the lock. Do not throw C++ exceptions
   // from this method unless they are fatal.
-  v8::Maybe<bool> instantiate(
-      Lock& js,
+  v8::Maybe<bool> instantiate(Lock& js,
       v8::Local<v8::Module> module,
       const CompilationObserver& observer) const KJ_WARN_UNUSED_RESULT;
 
@@ -238,23 +239,21 @@ public:
   // isolate via the lock. If the module has not yet been instantiated, it will
   // be instantiated first. Do not throw C++ exceptions from this method unless they
   // are fatal.
-  virtual v8::MaybeLocal<v8::Value> evaluate(
-      Lock& js,
+  virtual v8::MaybeLocal<v8::Value> evaluate(Lock& js,
       v8::Local<v8::Module> module,
       const CompilationObserver& observer,
       kj::Maybe<EvalCallback>& maybeEvalCallback) const KJ_WARN_UNUSED_RESULT = 0;
 
-  virtual v8::MaybeLocal<v8::Value> actuallyEvaluate(
-      Lock& js,
+  virtual v8::MaybeLocal<v8::Value> actuallyEvaluate(Lock& js,
       v8::Local<v8::Module> module,
       const CompilationObserver& observer) const KJ_WARN_UNUSED_RESULT = 0;
 
   // A helper interface that is used to make it easier for a synthetic module
   // evaluation callback to set the exports of the module.
   class ModuleNamespace final {
-  public:
-    explicit ModuleNamespace(v8::Local<v8::Module> inner,
-                             kj::ArrayPtr<const kj::String> namedExports);
+   public:
+    explicit ModuleNamespace(
+        v8::Local<v8::Module> inner, kj::ArrayPtr<const kj::String> namedExports);
     KJ_DISALLOW_COPY_AND_MOVE(ModuleNamespace);
 
     bool set(Lock& js, kj::StringPtr name, JsValue value) const;
@@ -264,7 +263,7 @@ public:
     // (should not include the "default")
     kj::ArrayPtr<const kj::StringPtr> getNamedExports() const;
 
-  private:
+   private:
     v8::Local<v8::Module> inner;
     kj::HashSet<kj::StringPtr> namedExports;
   };
@@ -272,12 +271,9 @@ public:
   // The EvaluateCallback is used to evaluate a synthetic module. The callback
   // is called after the module is resolved and instantiated.
   using EvaluateCallback =
-      Function<bool(const Url& specifier,
-                    const ModuleNamespace&,
-                    const CompilationObserver&)>;
+      Function<bool(const Url& specifier, const ModuleNamespace&, const CompilationObserver&)>;
 
-  static kj::Own<Module> newSynthetic(
-      Url specifier,
+  static kj::Own<Module> newSynthetic(Url specifier,
       Type type,
       EvaluateCallback callback,
       kj::Array<kj::String> namedExports = nullptr,
@@ -286,40 +282,29 @@ public:
   // Creates a new ESM module that takes ownership of the given code array.
   // This is generally used to construct ESM modules from a worker bundle.
   static kj::Own<Module> newEsm(
-      Url specifier,
-      Type type,
-      kj::Array<const char> code,
-      Flags flags = Flags::NONE);
+      Url specifier, Type type, kj::Array<const char> code, Flags flags = Flags::NONE);
 
   // Creates a new ESM module that does not take ownership of the given code
   // array. This is used to construct ESM modules from compiled-in built-in
   // modules.
   // This variation of newEsm does not take Flags as none of the existing
   // Flags are relevant other than the ESM flag which will be set automatically.
-  static kj::Own<Module> newEsm(
-      Url specifier,
-      Type type,
-      kj::ArrayPtr<const char> code);
+  static kj::Own<Module> newEsm(Url specifier, Type type, kj::ArrayPtr<const char> code);
 
   // The following methods are used to create the evaluation callbacks for various
   // kinds of common simple synthetic module types. The module registry is not
   // limited to just these kinds of modules, however. These are just the most
   // common.
 
-  static EvaluateCallback newTextModuleHandler(kj::Array<const char> data)
-      KJ_WARN_UNUSED_RESULT;
-  static EvaluateCallback newDataModuleHandler(kj::Array<kj::byte> data)
-      KJ_WARN_UNUSED_RESULT;
-  static EvaluateCallback newJsonModuleHandler(kj::Array<const char> data)
-      KJ_WARN_UNUSED_RESULT;
-  static EvaluateCallback newWasmModuleHandler(kj::Array<kj::byte> data)
-      KJ_WARN_UNUSED_RESULT;
+  static EvaluateCallback newTextModuleHandler(kj::Array<const char> data) KJ_WARN_UNUSED_RESULT;
+  static EvaluateCallback newDataModuleHandler(kj::Array<kj::byte> data) KJ_WARN_UNUSED_RESULT;
+  static EvaluateCallback newJsonModuleHandler(kj::Array<const char> data) KJ_WARN_UNUSED_RESULT;
+  static EvaluateCallback newWasmModuleHandler(kj::Array<kj::byte> data) KJ_WARN_UNUSED_RESULT;
 
   // An eval function is used for CommonJS style modules (including Node.js compat
   // modules. The expectation is that this method will be called when the CommonJS
   // style module is evaluated (e.g. within the EvaluationCallback).
-  static Function<void()> compileEvalFunction(
-      Lock& js,
+  static Function<void()> compileEvalFunction(Lock& js,
       kj::StringPtr code,
       kj::StringPtr name,
       kj::Maybe<JsObject> compileExtensions,
@@ -329,12 +314,13 @@ public:
   // EvaluatingScope class makes it possible to guard against that, throwing an
   // error if there's already an active evaluation happening.
   class EvaluatingScope final {
-  public:
+   public:
     EvaluatingScope() = default;
     KJ_DISALLOW_COPY_AND_MOVE(EvaluatingScope);
     ~EvaluatingScope() noexcept(false);
     kj::Own<void> enterEvaluationScope(const Url& specifier) KJ_WARN_UNUSED_RESULT;
-  private:
+
+   private:
     struct Impl;
     KJ_DECLARE_NON_POLYMORPHIC(Impl);
     kj::Maybe<Impl&> maybeEvaluating;
@@ -347,26 +333,23 @@ public:
   // synthetic module. All methods and properties exposed by the template
   // type T are exposed as additional globals within the executed scope.
   template <typename T, typename TypeWrapper>
-  static EvaluateCallback newCjsStyleModuleHandler(kj::String source, kj::String name)
-      KJ_WARN_UNUSED_RESULT {
-    return [source=kj::mv(source), name=kj::mv(name),
-            evaluatingScope=kj::heap<EvaluatingScope>()](
-        Lock& js,
-        const Url& specifier,
-        const Module::ModuleNamespace& ns,
-        const CompilationObserver& observer) mutable -> bool {
+  static EvaluateCallback newCjsStyleModuleHandler(
+      kj::String source, kj::String name) KJ_WARN_UNUSED_RESULT {
+    return [source = kj::mv(source), name = kj::mv(name),
+               evaluatingScope = kj::heap<EvaluatingScope>()](Lock& js, const Url& specifier,
+               const Module::ModuleNamespace& ns,
+               const CompilationObserver& observer) mutable -> bool {
       return js.tryCatch([&] {
         auto evaluating = evaluatingScope->enterEvaluationScope(specifier);
         auto& wrapper = TypeWrapper::from(js.v8Isolate);
         auto ext = alloc<T>(js, specifier);
         auto fn = Module::compileEvalFunction(js, source, name,
-            JsObject(wrapper.wrap(js.v8Context(), kj::none, ext.addRef())),
-            observer);
+            JsObject(wrapper.wrap(js.v8Context(), kj::none, ext.addRef())), observer);
         fn(js);
         // If there are named exports specified for the module namespace,
         // then we want to examine the ext->getExports() to extract those.
         auto exports = ext->getExports(js);
-        for (auto& name : ns.getNamedExports()) {
+        for (auto& name: ns.getNamedExports()) {
           ns.set(js, name, exports.get(js, name));
         }
         return ns.setDefault(js, exports);
@@ -378,23 +361,20 @@ public:
   }
 
   template <typename T, typename TypeWrapper, typename Func>
-  static EvaluateCallback newJsgObjectModuleHandler(Func factory)
-      KJ_WARN_UNUSED_RESULT {
-    return [factory=kj::mv(factory)](Lock& js,
-              const Url& specifier,
-              const Module::ModuleNamespace& ns,
-              const CompilationObserver& observer) mutable -> bool {
+  static EvaluateCallback newJsgObjectModuleHandler(Func factory) KJ_WARN_UNUSED_RESULT {
+    return [factory = kj::mv(factory)](Lock& js, const Url& specifier,
+               const Module::ModuleNamespace& ns,
+               const CompilationObserver& observer) mutable -> bool {
       Ref<T> instance = factory(js);
-      auto value = TypeWrapper::from(js.v8Isolate).wrap(
-          js.v8Context(), kj::none, kj::mv(instance));
+      auto value = TypeWrapper::from(js.v8Isolate).wrap(js.v8Context(), kj::none, kj::mv(instance));
       return ns.setDefault(js, JsValue(value));
     };
   }
 
-protected:
+ protected:
   Module(Url specifier, Type type, Flags flags = Flags::NONE);
 
-private:
+ private:
   Url specifier_;
   Type type_;
   Flags flags_;
@@ -413,27 +393,27 @@ constexpr Module::Flags operator|(const Module::Flags& a, const Module::Flags& b
 // any internal caching it may use to optimize resolution. Accesses to the
 // bundle must be thread-safe.
 class ModuleBundle {
-public:
+ public:
   using Type = Module::Type;
 
   // A Builder is used to construct a ModuleBundle.
   class Builder {
-  public:
+   public:
     KJ_DISALLOW_COPY_AND_MOVE(Builder);
 
-    using ResolveCallback =
-        kj::Function<kj::Maybe<kj::Own<Module>>(const ResolveContext&)>;
+    using ResolveCallback = kj::Function<kj::Maybe<kj::Own<Module>>(const ResolveContext&)>;
 
-    Builder& add(const Url& specifier, ResolveCallback callback)
-      KJ_LIFETIMEBOUND;
+    Builder& add(const Url& specifier, ResolveCallback callback) KJ_LIFETIMEBOUND;
 
     Builder& alias(const Url& alias, const Url& specifier) KJ_LIFETIMEBOUND;
 
     kj::Own<ModuleBundle> finish() KJ_WARN_UNUSED_RESULT;
 
-    inline Type type() const { return type_; }
+    inline Type type() const {
+      return type_;
+    }
 
-  protected:
+   protected:
     Builder(Type type);
 
     void ensureIsNotBundleSpecifier(const Url& specifier);
@@ -445,7 +425,7 @@ public:
 
   // Used to build a ModuleBundle representing modules sourced from a worker bundle.
   class BundleBuilder final: public Builder {
-  public:
+   public:
     static const Url BASE;
 
     BundleBuilder();
@@ -453,13 +433,11 @@ public:
 
     using EvaluateCallback = Module::EvaluateCallback;
 
-    BundleBuilder& addSyntheticModule(
-        kj::StringPtr specifier,
+    BundleBuilder& addSyntheticModule(kj::StringPtr specifier,
         EvaluateCallback callback,
         kj::Array<kj::String> namedExports = nullptr) KJ_LIFETIMEBOUND;
 
-    BundleBuilder& addEsmModule(
-        kj::StringPtr specifier,
+    BundleBuilder& addEsmModule(kj::StringPtr specifier,
         kj::Array<const char> code,
         Module::Flags flags = Module::Flags::ESM) KJ_LIFETIMEBOUND;
 
@@ -468,7 +446,7 @@ public:
 
   // Used to builde a ModuleBundle representing modules sources from the runtime.
   class BuiltinBuilder final: public Builder {
-  public:
+   public:
     enum class Type {
       BUILTIN,
       BUILTIN_ONLY,
@@ -477,24 +455,23 @@ public:
     KJ_DISALLOW_COPY_AND_MOVE(BuiltinBuilder);
 
     BuiltinBuilder& addSynthetic(
-        const Url& specifier,
-        BundleBuilder::EvaluateCallback callback) KJ_LIFETIMEBOUND;
+        const Url& specifier, BundleBuilder::EvaluateCallback callback) KJ_LIFETIMEBOUND;
 
-    BuiltinBuilder& addEsm(const Url& specifier, kj::ArrayPtr<const char> source)
-        KJ_LIFETIMEBOUND;
+    BuiltinBuilder& addEsm(const Url& specifier, kj::ArrayPtr<const char> source) KJ_LIFETIMEBOUND;
 
     // Adds a module that is implemented in C++ as a jsg::Object
     template <typename T, typename TypeWrapper>
     BuiltinBuilder& addObject(const Url& specifier) KJ_LIFETIMEBOUND {
       ensureIsNotBundleSpecifier(specifier);
-      add(specifier, [specifier=specifier.clone(), type = type()](
-          const ResolveContext& context) mutable -> kj::Maybe<kj::Own<Module>> {
+      add(specifier,
+          [specifier = specifier.clone(), type = type()](
+              const ResolveContext& context) mutable -> kj::Maybe<kj::Own<Module>> {
         if (context.specifier != specifier) return kj::none;
         return Module::newSynthetic(kj::mv(specifier), type,
             [](Lock& js, const Url& specifier, const Module::ModuleNamespace& ns,
-               const CompilationObserver&) {
-          auto value = TypeWrapper::from(js.v8Isolate).wrap(js.v8Context(), kj::none,
-              alloc<T>(js, specifier));
+                const CompilationObserver&) {
+          auto value = TypeWrapper::from(js.v8Isolate)
+                           .wrap(js.v8Context(), kj::none, alloc<T>(js, specifier));
           ns.setDefault(js, JsValue(value));
           return true;
         });
@@ -503,43 +480,42 @@ public:
     }
   };
 
-  static kj::Own<ModuleBundle> newFallbackBundle(Builder::ResolveCallback callback)
-      KJ_WARN_UNUSED_RESULT;
+  static kj::Own<ModuleBundle> newFallbackBundle(
+      Builder::ResolveCallback callback) KJ_WARN_UNUSED_RESULT;
 
   enum class BuiltInBundleOptions {
     NONE = 0,
   };
 
-  static void getBuiltInBundleFromCapnp(
-      BuiltinBuilder& builder,
+  static void getBuiltInBundleFromCapnp(BuiltinBuilder& builder,
       Bundle::Reader bundle,
       BuiltInBundleOptions options = BuiltInBundleOptions::NONE);
 
   KJ_DISALLOW_COPY_AND_MOVE(ModuleBundle);
 
-  inline Type type() const { return type_; }
+  inline Type type() const {
+    return type_;
+  }
 
   virtual ~ModuleBundle() noexcept(false) = default;
 
-  virtual kj::Maybe<Module&> resolve(const ResolveContext& context)
-      KJ_LIFETIMEBOUND KJ_WARN_UNUSED_RESULT = 0;
+  virtual kj::Maybe<Module&> resolve(
+      const ResolveContext& context) KJ_LIFETIMEBOUND KJ_WARN_UNUSED_RESULT = 0;
 
-protected:
+ protected:
   ModuleBundle(Type type);
 
-private:
+ private:
   Type type_;
 };
 
 constexpr ModuleBundle::BuiltInBundleOptions operator|(
-    const ModuleBundle::BuiltInBundleOptions& a,
-    const ModuleBundle::BuiltInBundleOptions& b) {
+    const ModuleBundle::BuiltInBundleOptions& a, const ModuleBundle::BuiltInBundleOptions& b) {
   return static_cast<ModuleBundle::BuiltInBundleOptions>(
       static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
 }
 constexpr ModuleBundle::BuiltInBundleOptions operator&(
-    const ModuleBundle::BuiltInBundleOptions& a,
-    const ModuleBundle::BuiltInBundleOptions& b) {
+    const ModuleBundle::BuiltInBundleOptions& a, const ModuleBundle::BuiltInBundleOptions& b) {
   return static_cast<ModuleBundle::BuiltInBundleOptions>(
       static_cast<uint8_t>(a) & static_cast<uint8_t>(b));
 }
@@ -547,20 +523,15 @@ constexpr ModuleBundle::BuiltInBundleOptions operator&(
 // A ModuleRegistry is a collection of zero or more ModuleBundles.
 // Importantly, the ModuleRegistry is immutable once created and
 // must be thread-safe.
-class ModuleRegistry final : public ModuleRegistryBase {
-private:
-  enum BundleIndices {
-    kBundle,
-    kBuiltin,
-    kBuiltinOnly,
-    kFallback,
-    kBundleCount
-  };
-public:
+class ModuleRegistry final: public ModuleRegistryBase {
+ private:
+  enum BundleIndices { kBundle, kBuiltin, kBuiltinOnly, kFallback, kBundleCount };
+
+ public:
   using EvalCallback = Module::EvalCallback;
 
   class Builder final {
-  public:
+   public:
     enum class Options {
       NONE = 0,
       // When set, allows the ModuleRegistry to use a fallback ModuleBundle to
@@ -584,7 +555,7 @@ public:
 
     Builder& setEvalCallback(EvalCallback callback) KJ_LIFETIMEBOUND;
 
-  private:
+   private:
     bool allowsFallback() const;
 
     // One slot for each of ModuleBundle::Type
@@ -596,8 +567,7 @@ public:
     friend class ModuleRegistry;
   };
 
-  kj::Maybe<Module&> resolve(const ResolveContext& context)
-      KJ_LIFETIMEBOUND KJ_WARN_UNUSED_RESULT;
+  kj::Maybe<Module&> resolve(const ResolveContext& context) KJ_LIFETIMEBOUND KJ_WARN_UNUSED_RESULT;
 
   // Attaches the ModuleRegistry to the given isolate by creating an IsolateModuleRegistry
   // and linking that to the isolate.
@@ -607,7 +577,8 @@ public:
   // This will throw a JsExceptionThrown exception if the module cannot be found or an
   // error occurs while the module is being evaluated. Modules resolved with this method
   // must be capable of fully evaluating within one drain of the microtask queue.
-  static JsValue resolve(Lock& js, kj::StringPtr specifier,
+  static JsValue resolve(Lock& js,
+      kj::StringPtr specifier,
       kj::StringPtr exportName = "default"_kjc,
       ResolveContext::Type type = ResolveContext::Type::BUNDLE,
       ResolveContext::Source source = ResolveContext::Source::INTERNAL,
@@ -619,18 +590,21 @@ public:
   // Modules resolved with this method must be capable of fully evaluating within one
   // drain of the microtask queue.
   static kj::Maybe<JsObject> tryResolveModuleNamespace(Lock& js,
-      kj::StringPtr specifier, ResolveContext::Type type = ResolveContext::Type::BUNDLE,
+      kj::StringPtr specifier,
+      ResolveContext::Type type = ResolveContext::Type::BUNDLE,
       ResolveContext::Source source = ResolveContext::Source::INTERNAL,
       kj::Maybe<const Url&> maybeReferrer = kj::none);
 
-  kj::Maybe<EvalCallback>& getEvalCallback() { return maybeEvalCallback; }
+  kj::Maybe<EvalCallback>& getEvalCallback() {
+    return maybeEvalCallback;
+  }
 
   // The constructor is public because kj::heap requires is to be. Do not
   // use the constructor directly. Use the ModuleRegistry::Builder
   ModuleRegistry(ModuleRegistry::Builder* builder);
   KJ_DISALLOW_COPY_AND_MOVE(ModuleRegistry);
 
-private:
+ private:
   const ResolveObserver& observer;
   kj::Maybe<ModuleRegistry&> maybeParent;
   // One slot for each of ModuleBundle::Type
@@ -639,14 +613,12 @@ private:
 };
 
 constexpr ModuleRegistry::Builder::Options operator|(
-    const ModuleRegistry::Builder::Options& a,
-    const ModuleRegistry::Builder::Options& b) {
+    const ModuleRegistry::Builder::Options& a, const ModuleRegistry::Builder::Options& b) {
   return static_cast<ModuleRegistry::Builder::Options>(
       static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
 }
 constexpr ModuleRegistry::Builder::Options operator&(
-    const ModuleRegistry::Builder::Options& a,
-    const ModuleRegistry::Builder::Options& b) {
+    const ModuleRegistry::Builder::Options& a, const ModuleRegistry::Builder::Options& b) {
   return static_cast<ModuleRegistry::Builder::Options>(
       static_cast<uint8_t>(a) & static_cast<uint8_t>(b));
 }

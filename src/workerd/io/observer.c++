@@ -1,5 +1,7 @@
 #include "observer.h"
+
 #include "worker-interface.h"
+
 #include <kj/common.h>
 #include <kj/map.h>
 #include <kj/mutex.h>
@@ -10,12 +12,10 @@ namespace {
 kj::Maybe<kj::Own<FeatureObserver>> featureObserver;
 
 class FeatureObserverImpl final: public FeatureObserver {
-public:
+ public:
   void use(Feature feature) const override {
     auto lock = counts.lockExclusive();
-    lock->upsert(feature, 1, [](uint64_t& count, uint64_t value) {
-      count += value;
-    });
+    lock->upsert(feature, 1, [](uint64_t& count, uint64_t value) { count += value; });
   }
 
   void collect(CollectCallback&& callback) const override {
@@ -25,7 +25,7 @@ public:
     }
   }
 
-private:
+ private:
   kj::MutexGuarded<kj::HashMap<Feature, uint64_t>> counts;
 };
 
@@ -46,4 +46,4 @@ kj::Maybe<FeatureObserver&> FeatureObserver::get() {
   }
   return kj::none;
 }
-};
+};  // namespace workerd

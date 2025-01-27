@@ -1,25 +1,32 @@
 #pragma once
 
-#include "async-hooks.h"
-#include "buffer.h"
 #include "crypto.h"
 #include "diagnostics-channel.h"
-#include "util.h"
 #include "zlib-util.h"
+
+#include <workerd/api/node/async-hooks.h>
+#include <workerd/api/node/buffer.h>
+#include <workerd/api/node/dns.h>
+#include <workerd/api/node/module.h>
+#include <workerd/api/node/timers.h>
+#include <workerd/api/node/url.h>
+#include <workerd/api/node/util.h>
+#include <workerd/io/compatibility-date.h>
 #include <workerd/jsg/jsg.h>
-#include <workerd/jsg/url.h>
-#include <workerd/jsg/modules.h>
 #include <workerd/jsg/modules-new.h>
-#include <capnp/dynamic.h>
+#include <workerd/jsg/url.h>
+
 #include <node/node.capnp.h>
+
+#include <capnp/dynamic.h>
 
 namespace workerd::api::node {
 
 // To be exposed only as an internal module for use by other built-ins.
 // TODO(later): Consider moving out of node.h when needed for other
 // built-ins
-class CompatibilityFlags : public jsg::Object {
-public:
+class CompatibilityFlags: public jsg::Object {
+ public:
   CompatibilityFlags() = default;
   CompatibilityFlags(jsg::Lock&, const jsg::Url&) {}
 
@@ -29,22 +36,25 @@ public:
     // literal values on the instance...
     auto dynamic = capnp::toDynamic(flags);
     auto schema = dynamic.getSchema();
-    for (auto field : schema.getFields()) {
+    for (auto field: schema.getFields()) {
       registry.template registerReadonlyInstanceProperty<bool>(
-          field.getProto().getName(),
-          dynamic.get(field).as<bool>());
+          field.getProto().getName(), dynamic.get(field).as<bool>());
     }
   }
 };
 
-#define NODEJS_MODULES(V)                                                       \
-  V(CompatibilityFlags, "workerd:compatibility-flags")                          \
-  V(AsyncHooksModule, "node-internal:async_hooks")                              \
-  V(BufferUtil, "node-internal:buffer")                                         \
-  V(CryptoImpl, "node-internal:crypto")                                         \
-  V(UtilModule, "node-internal:util")                                           \
-  V(DiagnosticsChannelModule, "node-internal:diagnostics_channel")              \
-  V(ZlibUtil, "node-internal:zlib")
+#define NODEJS_MODULES(V)                                                                          \
+  V(CompatibilityFlags, "workerd:compatibility-flags")                                             \
+  V(AsyncHooksModule, "node-internal:async_hooks")                                                 \
+  V(BufferUtil, "node-internal:buffer")                                                            \
+  V(CryptoImpl, "node-internal:crypto")                                                            \
+  V(ModuleUtil, "node-internal:module")                                                            \
+  V(UtilModule, "node-internal:util")                                                              \
+  V(DiagnosticsChannelModule, "node-internal:diagnostics_channel")                                 \
+  V(ZlibUtil, "node-internal:zlib")                                                                \
+  V(UrlUtil, "node-internal:url")                                                                  \
+  V(DnsUtil, "node-internal:dns")                                                                  \
+  V(TimersUtil, "node-internal:timers")
 
 // Add to the NODEJS_MODULES_EXPERIMENTAL list any currently in-development
 // node.js compat C++ modules that should be guarded by the experimental compat
@@ -56,9 +66,8 @@ bool isNodeJsCompatEnabled(auto featureFlags) {
 }
 
 template <class Registry>
-void registerNodeJsCompatModules(
-    Registry& registry, auto featureFlags) {
-#define V(T, N)                                                                 \
+void registerNodeJsCompatModules(Registry& registry, auto featureFlags) {
+#define V(T, N)                                                                                    \
   registry.template addBuiltinModule<T>(N, workerd::jsg::ModuleRegistry::Type::INTERNAL);
 
   NODEJS_MODULES(V)
@@ -82,7 +91,7 @@ void registerNodeJsCompatModules(
   // need to register the `node:async_hooks` module from the bundle.
   if (!nodeJsCompatEnabled && featureFlags.getNodeJsAls()) {
     jsg::Bundle::Reader reader = NODE_BUNDLE;
-    for (auto module : reader.getModules()) {
+    for (auto module: reader.getModules()) {
       auto specifier = module.getName();
       if (specifier == "node:async_hooks") {
         KJ_DASSERT(module.getType() == jsg::ModuleType::BUILTIN);
@@ -96,8 +105,9 @@ template <class TypeWrapper>
 kj::Own<jsg::modules::ModuleBundle> getInternalNodeJsCompatModuleBundle(auto featureFlags) {
   jsg::modules::ModuleBundle::BuiltinBuilder builder(
       jsg::modules::ModuleBundle::BuiltinBuilder::Type::BUILTIN_ONLY);
-#define V(M, N) static const auto k##M##Specifier = N##_url;        \
-                builder.addObject<M, TypeWrapper>(k##M##Specifier);
+#define V(M, N)                                                                                    \
+  static const auto k##M##Specifier = N##_url;                                                     \
+  builder.addObject<M, TypeWrapper>(k##M##Specifier);
   NODEJS_MODULES(V)
   if (featureFlags.getWorkerdExperimental()) {
     NODEJS_MODULES_EXPERIMENTAL(V)
@@ -116,7 +126,7 @@ kj::Own<jsg::modules::ModuleBundle> getExternalNodeJsCompatModuleBundle(auto fea
     // The AsyncLocalStorage API can be enabled independently of the rest
     // of the nodejs_compat layer.
     jsg::Bundle::Reader reader = NODE_BUNDLE;
-    for (auto module : reader.getModules()) {
+    for (auto module: reader.getModules()) {
       auto specifier = module.getName();
       if (specifier == "node:async_hooks") {
         KJ_DASSERT(module.getType() == jsg::ModuleType::BUILTIN);
@@ -132,12 +142,8 @@ kj::Own<jsg::modules::ModuleBundle> getExternalNodeJsCompatModuleBundle(auto fea
 #undef NODEJS_MODULES
 }  // namespace workerd::api::node
 
-#define EW_NODE_ISOLATE_TYPES              \
-  api::node::CompatibilityFlags,           \
-  EW_NODE_BUFFER_ISOLATE_TYPES,            \
-  EW_NODE_CRYPTO_ISOLATE_TYPES,            \
-  EW_NODE_DIAGNOSTICCHANNEL_ISOLATE_TYPES, \
-  EW_NODE_ASYNCHOOKS_ISOLATE_TYPES,        \
-  EW_NODE_UTIL_ISOLATE_TYPES,              \
-  EW_NODE_ZLIB_ISOLATE_TYPES
-
+#define EW_NODE_ISOLATE_TYPES                                                                      \
+  api::node::CompatibilityFlags, EW_NODE_BUFFER_ISOLATE_TYPES, EW_NODE_CRYPTO_ISOLATE_TYPES,       \
+      EW_NODE_DIAGNOSTICCHANNEL_ISOLATE_TYPES, EW_NODE_ASYNCHOOKS_ISOLATE_TYPES,                   \
+      EW_NODE_UTIL_ISOLATE_TYPES, EW_NODE_ZLIB_ISOLATE_TYPES, EW_NODE_URL_ISOLATE_TYPES,           \
+      EW_NODE_MODULE_ISOLATE_TYPES, EW_NODE_DNS_ISOLATE_TYPES, EW_NODE_TIMERS_ISOLATE_TYPES\

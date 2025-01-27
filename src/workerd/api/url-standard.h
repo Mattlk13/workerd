@@ -6,6 +6,7 @@
 
 #include <kj/hash.h>
 #include "form-data.h"
+#include <workerd/api/blob.h>
 #include <workerd/jsg/jsg.h>
 #include <workerd/jsg/url.h>
 #include <workerd/io/compatibility-date.capnp.h>
@@ -94,7 +95,17 @@ public:
     JSG_METHOD(toString);
     JSG_ITERABLE(entries);
 
-    if (flags.getUrlSearchParamsDeleteHasValueArg()) {
+    if (!flags.getSpecCompliantUrl()) {
+      // This is a hack. The spec-compliant URLSearchParams type is used in the Body constructor,
+      // see https://github.com/cloudflare/workerd/blob/v1.20241127.0/src/workerd/api/http.h#L255
+      // This means that when the TypeScript generation scripts are visiting root types for
+      // inclusion, we'll always visit the spec-compliant type even if we have the "url-standard"
+      // flag disabled. Rather than updating those usages based on which flags are enabled, we just
+      // delete the spec compliant declaration in an override if "url-standard" is disabled.
+      // We do the same for the non-spec-compliant URLSearchParams
+      // (https://github.com/cloudflare/workerd/blob/v1.20241127.0/src/workerd/api/url.h#L219).
+      JSG_TS_OVERRIDE(type URLSearchParams = never);
+    } else if (flags.getUrlSearchParamsDeleteHasValueArg()) {
       JSG_TS_OVERRIDE(URLSearchParams {
         entries(): IterableIterator<[key: string, value: string]>;
         [Symbol.iterator](): IterableIterator<[key: string, value: string]>;
@@ -161,7 +172,7 @@ public:
   }
 
   kj::ArrayPtr<const char> getHref();
-  void setHref(kj::String value);
+  void setHref(jsg::Lock& js, kj::String value);
 
   kj::Array<const char> getOrigin();
 
@@ -205,6 +216,8 @@ public:
   // ].filter((test) => URL.canParse(test));
   //
   static bool canParse(kj::String url, jsg::Optional<kj::String> base = kj::none);
+  static jsg::JsString createObjectURL(jsg::Lock& js, kj::OneOf<jsg::Ref<File>, jsg::Ref<Blob>> object);
+  static void revokeObjectURL(jsg::Lock& js, kj::String object_url);
 
   JSG_RESOURCE_TYPE(URL) {
     JSG_READONLY_PROTOTYPE_PROPERTY(origin, getOrigin);
@@ -223,6 +236,8 @@ public:
     JSG_METHOD_NAMED(toString, getHref);
     JSG_STATIC_METHOD(canParse);
     JSG_STATIC_METHOD(parse);
+    JSG_STATIC_METHOD(createObjectURL);
+    JSG_STATIC_METHOD(revokeObjectURL);
 
     JSG_TS_OVERRIDE(URL {
       constructor(url: string | URL, base?: string | URL);

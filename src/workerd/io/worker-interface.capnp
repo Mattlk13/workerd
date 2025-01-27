@@ -14,6 +14,17 @@ using import "/capnp/compat/http-over-capnp.capnp".HttpService;
 using import "/capnp/compat/byte-stream.capnp".ByteStream;
 using import "/workerd/io/outcome.capnp".EventOutcome;
 using import "/workerd/io/script-version.capnp".ScriptVersion;
+using import "/workerd/io/trace.capnp".UserSpanData;
+
+struct InvocationSpanContext {
+  struct TraceId {
+    high @0 :UInt64;
+    low @1 :UInt64;
+  }
+  traceId @0 :TraceId;
+  invocationId @1 :TraceId;
+  spanId @2 :UInt64;
+}
 
 struct Trace @0x8e8d911203762d34 {
   logs @0 :List(Log);
@@ -31,6 +42,8 @@ struct Trace @0x8e8d911203762d34 {
 
     message @2 :Text;
   }
+
+  spans @26 :List(UserSpanData);
 
   exceptions @1 :List(Exception);
   struct Exception {
@@ -138,6 +151,155 @@ struct Trace @0x8e8d911203762d34 {
 
   truncated @24 :Bool;
   # Indicates that the trace was truncated due to reaching the maximum size limit.
+
+  enum ExecutionModel {
+    stateless @0;
+    durableObject @1;
+    workflow @2;
+  }
+  executionModel @25 :ExecutionModel;
+  # the execution model of the worker being traced. Can be stateless for a regular worker,
+  # durableObject for a DO worker or workflow for the upcoming Workflows feature.
+
+  # =====================================================================================
+  # Additional types for streaming tail workers
+
+  struct Attribute {
+    # An Attribute mark is used to add detail to a span over its lifetime.
+    # The Attribute struct can also be used to provide arbitrary additional
+    # properties for some other structs.
+    # Modeled after https://opentelemetry.io/docs/concepts/signals/traces/#attributes
+    struct Value {
+      inner :union {
+        text @0 :Text;
+        bool @1 :Bool;
+        int @2 :Int32;
+        float @3 :Float64;
+      }
+    }
+    name @0 :Text;
+    value @1 :List(Value);
+  }
+
+  struct Return {
+    # A Return mark is used to mark the point at which a span operation returned
+    # a value. For instance, when a fetch subrequest response is received, or when
+    # the fetch handler returns a Response. Importantly, it does not signal that the
+    # span has closed, which may not happen for some period of time after the return
+    # mark is recorded (e.g. due to things like waitUntils or waiting to fully ready
+    # the response body payload, etc). Not all spans will have a Return mark.
+    info :union {
+      empty @0 :Void;
+      custom @1 :List(Attribute);
+      fetch @2 :FetchResponseInfo;
+    }
+  }
+
+  struct SpanOpen {
+    # Marks the opening of a child span within the streaming tail session.
+    operationName @0 :Text;
+    info :union {
+      empty @1 :Void;
+      custom @2 :List(Attribute);
+      fetch @3 :FetchEventInfo;
+      jsrpc @4 :JsRpcEventInfo;
+    }
+  }
+
+  struct SpanClose {
+    # Marks the closing of a child span within the streaming tail session.
+    # Once emitted, no further mark events should occur within the closed
+    # span.
+    outcome @0 :EventOutcome;
+  }
+
+  struct Resume {
+    # A resume event indicates that we are resuming a previously hibernated
+    # tail session.
+
+    attachment @0 :Data;
+    # When a tail session is hibernated, the tail worker is given the opportunity
+    # to provide some additional data that will be serialized and stored with the
+    # hibernated state. When the stream is resumed, if the tail worker has provided
+    # such data, it will be passed back to the worker in the resume event.
+  }
+
+  struct Onset {
+    # The Onset and Outcome event types are special forms of SpanOpen and
+    # SpanClose that explicitly mark the start and end of the root span.
+    # A streaming tail session will always begin with an Onset event, and
+    # always end with an Outcome event.
+    executionModel @0 :ExecutionModel;
+    scriptName @1 :Text;
+    scriptVersion @2 :ScriptVersion;
+    dispatchNamespace @3 :Text;
+    scriptTags @4 :List(Text);
+    entryPoint @5 :Text;
+
+    trigger @6 :InvocationSpanContext;
+    # If this invocation was triggered by a different invocation that
+    # is being traced, the trigger will identify the triggering span.
+    # Propagation of the trigger context is not required, and in some
+    # cases is not desirable.
+
+    info :union {
+      fetch @7 :FetchEventInfo;
+      jsrpc @8 :JsRpcEventInfo;
+      scheduled @9 :ScheduledEventInfo;
+      alarm @10 :AlarmEventInfo;
+      queue @11 :QueueEventInfo;
+      email @12 :EmailEventInfo;
+      trace @13 :TraceEventInfo;
+      hibernatableWebSocket @14 :HibernatableWebSocketEventInfo;
+      resume @15 :Resume;
+      custom @16 :CustomEventInfo;
+    }
+  }
+
+  struct Outcome {
+    outcome @0 :EventOutcome;
+    cpuTime @1 :UInt64;
+    wallTime @2 :UInt64;
+  }
+
+  struct Hibernate {
+    # A hibernate event indicates that the tail session is being hibernated.
+  }
+
+  struct Link {
+    # A link to another invocation span context.
+    label @0 :Text;
+    context @1 :InvocationSpanContext;
+  }
+
+  struct TailEvent {
+    # A streaming tail worker receives a series of Tail Events. Tail events always
+    # occur within an InvocationSpanContext. The first TailEvent delivered to a
+    # streaming tail session is always an Onset. The final TailEvent delivered is
+    # always an Outcome or Hibernate. Between those can be any number of SpanOpen,
+    # SpanClose, and Mark events. Every SpanOpen *must* be associated with a SpanClose
+    # unless the stream was abruptly terminated.
+    context @0 :InvocationSpanContext;
+    timestampNs @1 :Int64;
+    sequence @2 :UInt32;
+    event :union {
+      onset @3 :Onset;
+      outcome @4 :Outcome;
+      hibernate @5 :Hibernate;
+      spanOpen @6 :SpanOpen;
+      spanClose @7 :SpanClose;
+      attribute @8 :List(Attribute);
+      return @9 :Return;
+      diagnosticChannelEvent @10 :DiagnosticChannelEvent;
+      exception @11 :Exception;
+      log @12 :Log;
+      link @13 :Link;
+    }
+  }
+}
+
+struct SendTracesRun @0xde913ebe8e1b82a5 {
+  outcome @0 :EventOutcome;
 }
 
 struct ScheduledRun @0xd98fc1ae5c8095d0 {
@@ -398,13 +560,31 @@ interface JsRpcTarget $Cxx.allowCancellation {
   # Runs a Worker/DO's RPC method.
 }
 
+interface TailStreamTarget $Cxx.allowCancellation {
+  # Interface used to deliver streaming tail events to a tail worker.
+  struct TailStreamParams {
+    events @0 :List(Trace.TailEvent);
+  }
+
+  struct TailStreamResults {
+    pipeline @0 :TailStreamTarget;
+    # For an initial tailStream call, the pipeline would be expected to return
+    # a TailStreamTarget that would handle all the remaining events. Each of
+    # those subsequent calls to TailStreamTarget would not be expected to
+    # return a pipeline field at all.
+  }
+
+  report @0 TailStreamParams -> TailStreamResults;
+  # Report one or more streaming tail events to a tail worker.
+}
+
 interface EventDispatcher @0xf20697475ec1752d {
   # Interface used to deliver events to a Worker's global event handlers.
 
   getHttpService @0 () -> (http :HttpService) $Cxx.allowCancellation;
   # Gets the HTTP interface to this worker (to trigger FetchEvents).
 
-  sendTraces @1 (traces :List(Trace)) $Cxx.allowCancellation;
+  sendTraces @1 (traces :List(Trace)) -> (result :SendTracesRun) $Cxx.allowCancellation;
   # Deliver a trace event to a trace worker. This always completes immediately; the trace handler
   # runs as a "waitUntil" task.
 
@@ -444,6 +624,13 @@ interface EventDispatcher @0xf20697475ec1752d {
   # server, then `jsRpcSession()` won't return until all those capabilities have been dropped.
   #
   # In C++, we use `WorkerInterface::customEvent()` to dispatch this event.
+
+  tailStreamSession @10 () -> (topLevel :TailStreamTarget) $Cxx.allowCancellation;
+  # Opens a streaming tail session. The call does not return until the session is complete.
+  #
+  # `topLevel` is the top-level tail session target, on which exactly one method call can
+  # be made. This call must be made using pipelining since `tailStreamSession()` won't return
+  # until after the call completes.
 
   obsolete5 @5();
   obsolete6 @6();

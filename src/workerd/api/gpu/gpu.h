@@ -26,9 +26,11 @@
 #include "gpu-texture-view.h"
 #include "gpu-texture.h"
 #include "gpu-utils.h"
+
+#include <workerd/jsg/jsg.h>
+
 #include <dawn/native/DawnNative.h>
 #include <webgpu/webgpu_cpp.h>
-#include <workerd/jsg/jsg.h>
 
 // Very experimental initial webgpu support based on the Dawn library.
 namespace workerd::api::gpu {
@@ -41,16 +43,16 @@ struct GPURequestAdapterOptions {
   JSG_STRUCT(powerPreference, forceFallbackAdapter);
 };
 
-class GPU : public jsg::Object {
-public:
+class GPU: public jsg::Object {
+ public:
   explicit GPU();
   JSG_RESOURCE_TYPE(GPU) {
     JSG_METHOD(requestAdapter);
   }
 
-private:
-  jsg::Promise<kj::Maybe<jsg::Ref<GPUAdapter>>>
-  requestAdapter(jsg::Lock&, jsg::Optional<GPURequestAdapterOptions>);
+ private:
+  jsg::Promise<kj::Maybe<jsg::Ref<GPUAdapter>>> requestAdapter(
+      jsg::Lock&, jsg::Optional<GPURequestAdapterOptions>);
   dawn::native::Instance instance_;
   kj::Own<AsyncRunner> async_;
 };
@@ -88,4 +90,4 @@ private:
       api::gpu::GPURenderPassTimestampWrites, api::gpu::GPUImageCopyTexture,                       \
       api::gpu::GPUImageCopyBuffer, api::gpu::GPUOrigin3DDict
 
-}; // namespace workerd::api::gpu
+};  // namespace workerd::api::gpu

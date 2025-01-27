@@ -2,11 +2,12 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+#include <workerd/api/actor-state.h>
+#include <workerd/api/global-scope.h>
 #include <workerd/api/worker-rpc.h>
 #include <workerd/io/features.h>
-#include <workerd/api/global-scope.h>
-#include <workerd/api/actor-state.h>
 #include <workerd/jsg/ser.h>
+
 #include <capnp/membrane.h>
 
 namespace workerd::api {
@@ -22,7 +23,7 @@ using StreamSinkFulfiller = kj::Own<kj::PromiseFulfiller<rpc::JsValue::StreamSin
 // provide the appropriate destination capability. This class is designed to allow these two
 // calls to happen in either order for each slot.
 class StreamSinkImpl final: public rpc::JsValue::StreamSink::Server, public kj::Refcounted {
-public:
+ public:
   ~StreamSinkImpl() noexcept(false) {
     for (auto& slot: table) {
       KJ_IF_SOME(f, slot.tryGet<StreamFulfiller>()) {
@@ -62,10 +63,10 @@ public:
     if (table[i] == nullptr) {
       auto paf = kj::newPromiseAndFulfiller<capnp::Capability::Client>();
       table[i] = kj::mv(paf.fulfiller);
-      context.getResults(capnp::MessageSize {4, 1}).setStream(kj::mv(paf.promise));
+      context.getResults(capnp::MessageSize{4, 1}).setStream(kj::mv(paf.promise));
     } else KJ_SWITCH_ONEOF(table[i]) {
       KJ_CASE_ONEOF(stream, capnp::Capability::Client) {
-        context.getResults(capnp::MessageSize {4, 1}).setStream(kj::mv(stream));
+        context.getResults(capnp::MessageSize{4, 1}).setStream(kj::mv(stream));
         table[i] = Consumed();
       }
       KJ_CASE_ONEOF(fulfiller, StreamFulfiller) {
@@ -79,7 +80,7 @@ public:
     return kj::READY_NOW;
   }
 
-private:
+ private:
   using StreamFulfiller = kj::Own<kj::PromiseFulfiller<capnp::Capability::Client>>;
   struct Consumed {};
 
@@ -106,7 +107,7 @@ capnp::Capability::Client RpcSerializerExternalHander::writeStream(BuilderCallba
   }
 
   auto result = ({
-    auto req = streamSinkPtr->startStreamRequest(capnp::MessageSize {4, 0});
+    auto req = streamSinkPtr->startStreamRequest(capnp::MessageSize{4, 0});
     req.setExternalIndex(externals.size());
     req.send().getStream();
   });
@@ -116,8 +117,8 @@ capnp::Capability::Client RpcSerializerExternalHander::writeStream(BuilderCallba
   return result;
 }
 
-capnp::Orphan<capnp::List<rpc::JsValue::External>>
-    RpcSerializerExternalHander::build(capnp::Orphanage orphanage) {
+capnp::Orphan<capnp::List<rpc::JsValue::External>> RpcSerializerExternalHander::build(
+    capnp::Orphanage orphanage) {
   auto result = orphanage.newOrphan<capnp::List<rpc::JsValue::External>>(externals.size());
   auto builder = result.get();
   for (auto i: kj::indices(externals)) {
@@ -155,23 +156,27 @@ namespace {
 // `makeBuilder` is a function which takes a capnp::MessageSize hint and returns the
 // rpc::JsValue::Builder to fill in.
 template <typename Func>
-void serializeJsValue(jsg::Lock& js, jsg::JsValue value, Func makeBuilder,
+void serializeJsValue(jsg::Lock& js,
+    jsg::JsValue value,
+    Func makeBuilder,
     RpcSerializerExternalHander::GetStreamSinkFunc getStreamSinkFunc) {
   RpcSerializerExternalHander externalHandler(kj::mv(getStreamSinkFunc));
 
-  jsg::Serializer serializer(js, jsg::Serializer::Options {
-    .version = 15,
-    .omitHeader = false,
-    .treatClassInstancesAsPlainObjects = false,
-    .externalHandler = externalHandler,
-  });
+  jsg::Serializer serializer(js,
+      jsg::Serializer::Options{
+        .version = 15,
+        .omitHeader = false,
+        .treatClassInstancesAsPlainObjects = false,
+        .externalHandler = externalHandler,
+      });
   serializer.write(js, value);
   kj::Array<const byte> data = serializer.release().data;
   JSG_ASSERT(data.size() <= MAX_JS_RPC_MESSAGE_SIZE, Error,
       "Serialized RPC arguments or return values are limited to 1MiB, but the size of this value "
-      "was: ", data.size(), " bytes.");
+      "was: ",
+      data.size(), " bytes.");
 
-  capnp::MessageSize hint {0, 0};
+  capnp::MessageSize hint{0, 0};
   hint.wordCount += (data.size() + sizeof(capnp::word) - 1) / sizeof(capnp::word);
   hint.wordCount += capnp::sizeInWords<rpc::JsValue>();
   hint.wordCount += externalHandler.size() * capnp::sizeInWords<rpc::JsValue::External>();
@@ -185,8 +190,8 @@ void serializeJsValue(jsg::Lock& js, jsg::JsValue value, Func makeBuilder,
   builder.setV8Serialized(data);
 
   if (externalHandler.size() > 0) {
-    builder.adoptExternals(externalHandler.build(
-        capnp::Orphanage::getForMessageContaining(builder)));
+    builder.adoptExternals(
+        externalHandler.build(capnp::Orphanage::getForMessageContaining(builder)));
   }
 }
 
@@ -197,18 +202,18 @@ struct DeserializeResult {
 };
 
 // Call to construct a JS value from an `rpc::JsValue`.
-DeserializeResult deserializeJsValue(jsg::Lock& js, rpc::JsValue::Reader reader,
-                                     kj::Maybe<StreamSinkImpl&> streamSink = kj::none) {
+DeserializeResult deserializeJsValue(
+    jsg::Lock& js, rpc::JsValue::Reader reader, kj::Maybe<StreamSinkImpl&> streamSink = kj::none) {
   auto disposalGroup = kj::heap<RpcStubDisposalGroup>();
 
   RpcDeserializerExternalHander externalHandler(reader.getExternals(), *disposalGroup, streamSink);
 
   jsg::Deserializer deserializer(js, reader.getV8Serialized(), kj::none, kj::none,
-      jsg::Deserializer::Options {
-    .version = 15,
-    .readHeader = true,
-    .externalHandler = externalHandler,
-  });
+      jsg::Deserializer::Options{
+        .version = 15,
+        .readHeader = true,
+        .externalHandler = externalHandler,
+      });
 
   return {
     .value = deserializer.readValue(js),
@@ -219,14 +224,17 @@ DeserializeResult deserializeJsValue(jsg::Lock& js, rpc::JsValue::Reader reader,
 
 // Does deserializeJsValue() and then adds a `dispose()` method to the returned object (if it is
 // an object) which disposes all stubs therein.
-jsg::JsValue deserializeRpcReturnValue(jsg::Lock& js,
-                                       rpc::JsRpcTarget::CallResults::Reader callResults,
-                                       StreamSinkImpl& streamSink) {
-  auto [ value, disposalGroup, _ ] = deserializeJsValue(js, callResults.getResult(), streamSink);
+jsg::JsValue deserializeRpcReturnValue(
+    jsg::Lock& js, rpc::JsRpcTarget::CallResults::Reader callResults, StreamSinkImpl& streamSink) {
+  auto [value, disposalGroup, _] = deserializeJsValue(js, callResults.getResult(), streamSink);
 
-  if (callResults.hasCallPipeline()) {
-    disposalGroup->setCallPipeline(IoContext::current().addObject(
-        kj::heap(callResults.getCallPipeline())));
+  // If the object had a disposer on the callee side, it will run when we discard the callPipeline,
+  // so attach that to the disposal group on the caller side. If the returned object did NOT have
+  // a disposer then we should discard callPipeline so that we don't hold open the callee's
+  // context for no reason.
+  if (callResults.getHasDisposer()) {
+    disposalGroup->setCallPipeline(
+        IoContext::current().addObject(kj::heap(callResults.getCallPipeline())));
   }
 
   KJ_IF_SOME(obj, value.tryCast<jsg::JsObject>()) {
@@ -236,11 +244,9 @@ jsg::JsValue deserializeRpcReturnValue(jsg::Lock& js,
     } else {
       // Add a dispose method to the return object that disposes the DisposalGroup.
       v8::Local<v8::Value> func = js.wrapSimpleFunction(js.v8Context(),
-          [disposalGroup = kj::mv(disposalGroup)]
-          (jsg::Lock&, const v8::FunctionCallbackInfo<v8::Value>&) mutable {
-        disposalGroup->disposeAll();
-      });
-      obj.set(js, js.symbolDispose(), jsg::JsValue(func));
+          [disposalGroup = kj::mv(disposalGroup)](jsg::Lock&,
+              const v8::FunctionCallbackInfo<v8::Value>&) mutable { disposalGroup->disposeAll(); });
+      obj.setNonEnumerable(js, js.symbolDispose(), jsg::JsValue(func));
     }
   } else {
     // Result wasn't an object, so it must not contain any stubs.
@@ -255,7 +261,7 @@ jsg::JsValue deserializeRpcReturnValue(jsg::Lock& js,
 //
 // TODO(cleanup): This is generally useful, should it be part of capnp?
 class CompletionMembrane final: public capnp::MembranePolicy, public kj::Refcounted {
-public:
+ public:
   explicit CompletionMembrane(kj::Own<kj::PromiseFulfiller<void>> doneFulfiller)
       : doneFulfiller(kj::mv(doneFulfiller)) {}
   ~CompletionMembrane() noexcept(false) {
@@ -276,7 +282,7 @@ public:
     return kj::addRef(*this);
   }
 
-private:
+ private:
   kj::Own<kj::PromiseFulfiller<void>> doneFulfiller;
 };
 
@@ -284,9 +290,8 @@ private:
 //
 // TODO(cleanup): This is generally useful, should it be part of capnp?
 class RevokerMembrane final: public capnp::MembranePolicy, public kj::Refcounted {
-public:
-  explicit RevokerMembrane(kj::Promise<void> promise)
-      : promise(promise.fork()) {}
+ public:
+  explicit RevokerMembrane(kj::Promise<void> promise): promise(promise.fork()) {}
 
   kj::Maybe<capnp::Capability::Client> inboundCall(
       uint64_t interfaceId, uint16_t methodId, capnp::Capability::Client target) override {
@@ -306,7 +311,7 @@ public:
     return promise.addBranch();
   }
 
-private:
+ private:
   kj::ForkedPromise<void> promise;
 };
 
@@ -323,11 +328,14 @@ void tryCallDisposeMethod(jsg::Lock& js, jsg::JsValue value) {
   });
 }
 
-} // namespace
+}  // namespace
 
-JsRpcPromise::JsRpcPromise(jsg::JsRef<jsg::JsPromise> inner, kj::Own<WeakRef> weakRefParam,
-                           IoOwn<rpc::JsRpcTarget::CallResults::Pipeline> pipeline)
-    : inner(kj::mv(inner)), weakRef(kj::mv(weakRefParam)), state(Pending { kj::mv(pipeline) }) {
+JsRpcPromise::JsRpcPromise(jsg::JsRef<jsg::JsPromise> inner,
+    kj::Own<WeakRef> weakRefParam,
+    IoOwn<rpc::JsRpcTarget::CallResults::Pipeline> pipeline)
+    : inner(kj::mv(inner)),
+      weakRef(kj::mv(weakRefParam)),
+      state(Pending{kj::mv(pipeline)}) {
   KJ_REQUIRE(weakRef->ref == kj::none);
   weakRef->ref = *this;
 }
@@ -337,7 +345,7 @@ JsRpcPromise::~JsRpcPromise() noexcept(false) {
 
 void JsRpcPromise::resolve(jsg::Lock& js, jsg::JsValue result) {
   if (state.is<Pending>()) {
-    state = Resolved {
+    state = Resolved{
       .result = jsg::Value(js.v8Isolate, result),
       .ctxCheck = IoContext::current().addObject(*this),
     };
@@ -430,15 +438,13 @@ struct JsRpcPromiseAndPipleine {
   rpc::JsRpcTarget::CallResults::Pipeline pipeline;
 
   jsg::Ref<JsRpcPromise> asJsRpcPromise(jsg::Lock& js) && {
-    return jsg::alloc<JsRpcPromise>(
-        jsg::JsRef<jsg::JsPromise>(js, promise), kj::mv(weakRef),
+    return jsg::alloc<JsRpcPromise>(jsg::JsRef<jsg::JsPromise>(js, promise), kj::mv(weakRef),
         IoContext::current().addObject(kj::heap(kj::mv(pipeline))));
   }
 };
 
 // Core implementation of making an RPC call, reusable for many cases below.
-JsRpcPromiseAndPipleine callImpl(
-    jsg::Lock& js,
+JsRpcPromiseAndPipleine callImpl(jsg::Lock& js,
     JsRpcClientProvider& parent,
     kj::Maybe<const kj::String&> name,
     // If `maybeArgs` is provided, this is a call, otherwise it is a property access.
@@ -500,17 +506,18 @@ JsRpcPromiseAndPipleine callImpl(
       kj::Maybe<StreamSinkFulfiller> paramsStreamSinkFulfiller;
 
       KJ_IF_SOME(args, maybeArgs) {
-        // This is a function call with arguments.
-        kj::Vector<jsg::JsValue> argv(args.Length());
-        for (int n = 0; n < args.Length(); n++) {
-          argv.add(jsg::JsValue(args[n]));
-        }
-
         // If we have arguments, serialize them.
         // Note that we may fail to serialize some element, in which case this will throw back to
         // JS.
-        if (argv.size() > 0) {
-          serializeJsValue(js, js.arr(argv.asPtr()), [&](capnp::MessageSize hint) {
+        if (args.Length() > 0) {
+          // This is a function call with arguments.
+          v8::LocalVector<v8::Value> argv(js.v8Isolate, args.Length());
+          for (int n = 0; n < args.Length(); n++) {
+            argv[n] = args[n];
+          }
+          auto arr = v8::Array::New(js.v8Isolate, argv.data(), argv.size());
+
+          serializeJsValue(js, jsg::JsValue(arr), [&](capnp::MessageSize hint) {
             // TODO(perf): Actually use the size hint.
             return builder.getOperation().initCallWithArgs();
           }, [&]() -> rpc::JsValue::StreamSink::Client {
@@ -548,9 +555,9 @@ JsRpcPromiseAndPipleine callImpl(
       // RemotePromise lets us consume its pipeline and promise portions independently; we consume
       // the promise here and we consume the pipeline below, both via kj::mv().
       auto jsPromise = ioContext.awaitIo(js, kj::mv(callResult),
-            [weakRef = kj::atomicAddRef(*weakRef), resultStreamSink = kj::mv(resultStreamSink)]
-            (jsg::Lock& js, capnp::Response<rpc::JsRpcTarget::CallResults> response) mutable
-            -> jsg::Value {
+          [weakRef = kj::atomicAddRef(*weakRef), resultStreamSink = kj::mv(resultStreamSink)](
+              jsg::Lock& js,
+              capnp::Response<rpc::JsRpcTarget::CallResults> response) mutable -> jsg::Value {
         auto jsResult = deserializeRpcReturnValue(js, response, *resultStreamSink);
 
         if (weakRef->disposed) {
@@ -576,12 +583,10 @@ JsRpcPromiseAndPipleine callImpl(
       // synchronously from async functions.
       auto jsError = jsg::JsValue(error.getHandle(js));
       auto pipeline = capnp::newBrokenPipeline(js.exceptionToKj(jsError));
-      return {
-        .promise = js.rejectedJsPromise(jsError),
+      return {.promise = js.rejectedJsPromise(jsError),
         .weakRef = kj::atomicRefcounted<JsRpcPromise::WeakRef>(),
-        .pipeline = rpc::JsRpcTarget::CallResults::Pipeline(
-            capnp::AnyPointer::Pipeline(kj::mv(pipeline)))
-      };
+        .pipeline =
+            rpc::JsRpcTarget::CallResults::Pipeline(capnp::AnyPointer::Pipeline(kj::mv(pipeline)))};
     });
   } catch (jsg::JsExceptionThrown&) {
     // This must be a termination exception, or we would have caught it above.
@@ -594,9 +599,8 @@ JsRpcPromiseAndPipleine callImpl(
     return {
       .promise = jsg::JsPromise(js.wrapSimplePromise(js.rejectedPromise<jsg::Value>(kj::mv(e)))),
       .weakRef = kj::atomicRefcounted<JsRpcPromise::WeakRef>(),
-      .pipeline = rpc::JsRpcTarget::CallResults::Pipeline(
-          capnp::AnyPointer::Pipeline(kj::mv(pipeline)))
-    };
+      .pipeline =
+          rpc::JsRpcTarget::CallResults::Pipeline(capnp::AnyPointer::Pipeline(kj::mv(pipeline)))};
   }
 }
 
@@ -622,8 +626,10 @@ jsg::Ref<JsRpcPromise> JsRpcPromise::call(const v8::FunctionCallbackInfo<v8::Val
 
 namespace {
 
-jsg::JsValue thenImpl(jsg::Lock& js, v8::Local<v8::Promise> promise,
-      v8::Local<v8::Function> handler, jsg::Optional<v8::Local<v8::Function>> errorHandler) {
+jsg::JsValue thenImpl(jsg::Lock& js,
+    v8::Local<v8::Promise> promise,
+    v8::Local<v8::Function> handler,
+    jsg::Optional<v8::Local<v8::Function>> errorHandler) {
   KJ_IF_SOME(e, errorHandler) {
     // Note that we intentionally propagate any exception from promise->Then() sychronously since
     // if V8's native Promise threw synchronously from `then()`, we might as well too. Anyway it's
@@ -634,26 +640,27 @@ jsg::JsValue thenImpl(jsg::Lock& js, v8::Local<v8::Promise> promise,
   }
 }
 
-jsg::JsValue catchImpl(jsg::Lock& js, v8::Local<v8::Promise> promise,
-    v8::Local<v8::Function> errorHandler) {
+jsg::JsValue catchImpl(
+    jsg::Lock& js, v8::Local<v8::Promise> promise, v8::Local<v8::Function> errorHandler) {
   return jsg::JsPromise(jsg::check(promise->Catch(js.v8Context(), errorHandler)));
 }
 
-jsg::JsValue finallyImpl(jsg::Lock& js, v8::Local<v8::Promise> promise,
-    v8::Local<v8::Function> onFinally) {
+jsg::JsValue finallyImpl(
+    jsg::Lock& js, v8::Local<v8::Promise> promise, v8::Local<v8::Function> onFinally) {
   // HACK: `finally()` is not exposed as a C++ API, so we have to manually read it from JS.
   jsg::JsObject obj(promise);
   auto func = obj.get(js, "finally");
   KJ_ASSERT(func.isFunction());
   v8::Local<v8::Value> param = onFinally;
-  return jsg::JsValue(jsg::check(v8::Local<v8::Value>(func).As<v8::Function>()
-      ->Call(js.v8Context(), obj, 1, &param)));
+  return jsg::JsValue(jsg::check(
+      v8::Local<v8::Value>(func).As<v8::Function>()->Call(js.v8Context(), obj, 1, &param)));
 }
 
 }  // namespace
 
-jsg::JsValue JsRpcProperty::then(jsg::Lock& js, v8::Local<v8::Function> handler,
-      jsg::Optional<v8::Local<v8::Function>> errorHandler) {
+jsg::JsValue JsRpcProperty::then(jsg::Lock& js,
+    v8::Local<v8::Function> handler,
+    jsg::Optional<v8::Local<v8::Function>> errorHandler) {
   auto promise = callImpl(js, *parent, name, kj::none).promise;
 
   return thenImpl(js, promise, handler, errorHandler);
@@ -671,8 +678,9 @@ jsg::JsValue JsRpcProperty::finally(jsg::Lock& js, v8::Local<v8::Function> onFin
   return finallyImpl(js, promise, onFinally);
 }
 
-jsg::JsValue JsRpcPromise::then(jsg::Lock& js, v8::Local<v8::Function> handler,
-      jsg::Optional<v8::Local<v8::Function>> errorHandler) {
+jsg::JsValue JsRpcPromise::then(jsg::Lock& js,
+    v8::Local<v8::Function> handler,
+    jsg::Optional<v8::Local<v8::Function>> errorHandler) {
   return thenImpl(js, inner.getHandle(js), handler, errorHandler);
 }
 
@@ -818,8 +826,7 @@ void RpcStubDisposalGroup::disposeAll() {
   KJ_ASSERT(list.empty());
 }
 
-kj::Maybe<jsg::Ref<JsRpcProperty>> JsRpcStub::getRpcMethod(
-    jsg::Lock& js, kj::String name) {
+kj::Maybe<jsg::Ref<JsRpcProperty>> JsRpcStub::getRpcMethod(jsg::Lock& js, kj::String name) {
   // Do not return a method for `then`, otherwise JavaScript decides this is a thenable, i.e. a
   // custom Promise, which will mean a Promise that resolves to this object will attempt to chain
   // with it, which is not what you want!
@@ -846,8 +853,8 @@ void JsRpcStub::serialize(jsg::Lock& js, jsg::Serializer& serializer) {
 
 jsg::Ref<JsRpcStub> JsRpcStub::deserialize(
     jsg::Lock& js, rpc::SerializationTag tag, jsg::Deserializer& deserializer) {
-  auto& handler = KJ_REQUIRE_NONNULL(deserializer.getExternalHandler(),
-      "got JsRpcStub on non-RPC serialized object?");
+  auto& handler = KJ_REQUIRE_NONNULL(
+      deserializer.getExternalHandler(), "got JsRpcStub on non-RPC serialized object?");
   auto externalHandler = dynamic_cast<RpcDeserializerExternalHander*>(&handler);
   KJ_REQUIRE(externalHandler != nullptr, "got JsRpcStub on non-RPC serialized object?");
 
@@ -855,8 +862,8 @@ jsg::Ref<JsRpcStub> JsRpcStub::deserialize(
   KJ_REQUIRE(reader.isRpcTarget(), "external table slot type doesn't match serialization tag");
 
   auto& ioctx = IoContext::current();
-  return jsg::alloc<JsRpcStub>(ioctx.addObject(kj::heap(reader.getRpcTarget())),
-      externalHandler->getDisposalGroup());
+  return jsg::alloc<JsRpcStub>(
+      ioctx.addObject(kj::heap(reader.getRpcTarget())), externalHandler->getDisposalGroup());
 }
 
 static bool isFunctionForRpc(jsg::Lock& js, v8::Local<v8::Function> func) {
@@ -884,24 +891,27 @@ static inline bool isFunctionForRpc(jsg::Lock& js, jsg::JsObject val) {
 
 // `makeCallPipeline()` has a bit of a complicated result type..
 namespace MakeCallPipeline {
-  // The value is an object, which may have stubs inside it.
-  struct Object {
-    rpc::JsRpcTarget::Client cap;
+// The value is an object, which may have stubs inside it.
+struct Object {
+  rpc::JsRpcTarget::Client cap;
 
-    // Was the value a plain JavaScript object which had a custom dispose() method?
-    bool hasDispose;
-  };
-
-  // The value was something that should serialize to a single stub (e.g. it was an RpcTarget, a
-  // plain function, or already a stub). The callPipeline should simply be a copy of that stub.
-  struct SingleStub {};
-
-  // The value is not a type that supports pipelining. It may still be serializable, and it could
-  // even contain stubs (e.g. in a Map).
-  struct NonPipelinable {};
-
-  using Result = kj::OneOf<Object, SingleStub, NonPipelinable>;
+  // Was the value a plain JavaScript object which had a custom dispose() method?
+  bool hasDispose;
 };
+
+// The value was something that should serialize to a single stub (e.g. it was an RpcTarget, a
+// plain function, or already a stub). The callPipeline should simply be a copy of that stub.
+struct SingleStub {};
+
+// The value is not a type that supports pipelining. It may still be serializable, and it could
+// even contain stubs (e.g. in a Map).
+struct NonPipelinable {
+  // callPipeline to return just for error-handling purposes.
+  rpc::JsRpcTarget::Client errorPipeline;
+};
+
+using Result = kj::OneOf<Object, SingleStub, NonPipelinable>;
+};  // namespace MakeCallPipeline
 
 // Create the callPipeline for a call result.
 //
@@ -914,9 +924,8 @@ static MakeCallPipeline::Result makeCallPipeline(jsg::Lock& js, jsg::JsValue val
 // of a top-level entrypoint vs. a transient object introduced by a previous RPC in the same
 // session.
 class JsRpcTargetBase: public rpc::JsRpcTarget::Server {
-public:
-  JsRpcTargetBase(IoContext& ctx)
-      : weakIoContext(ctx.getWeakRef()) {}
+ public:
+  JsRpcTargetBase(IoContext& ctx): weakIoContext(ctx.getWeakRef()) {}
 
   struct EnvCtx {
     v8::Local<v8::Value> env;
@@ -940,8 +949,10 @@ public:
 
   // Handles the delivery of JS RPC method calls.
   kj::Promise<void> call(CallContext callContext) override {
-    IoContext& ctx = JSG_REQUIRE_NONNULL(weakIoContext->tryGet(), Error,
-        "The destination object for this RPC no longer exists.");
+    IoContext& ctx = JSG_REQUIRE_NONNULL(
+        weakIoContext->tryGet(), Error, "The destination object for this RPC no longer exists.");
+
+    ctx.getLimitEnforcer().topUpActor();
 
     // HACK: Cap'n Proto call contexts are documented as being pointer-like types where the backing
     // object's lifetime is that of the RPC call, but in reality they are refcounted under the
@@ -954,10 +965,9 @@ public:
     auto ownCallContext = capnp::CallContextHook::from(callContext).addRef();
 
     // Try to execute the requested method.
-    auto promise = ctx.run(
-        [this, &ctx, callContext, ownCallContext = kj::mv(ownCallContext), ownThis = thisCap()]
-        (Worker::Lock& lock) mutable -> kj::Promise<void> {
-
+    auto promise =
+        ctx.run([this, &ctx, callContext, ownCallContext = kj::mv(ownCallContext),
+                    ownThis = thisCap()](Worker::Lock& lock) mutable -> kj::Promise<void> {
       jsg::Lock& js = lock;
 
       auto targetInfo = getTargetInfo(lock, ctx);
@@ -965,8 +975,8 @@ public:
       auto params = callContext.getParams();
 
       // We will try to get the function, if we can't we'll throw an error to the client.
-      auto [propHandle, thisArg, methodNameForTrace] = tryGetProperty(
-          lock, targetInfo.target, params, targetInfo.allowInstanceProperties);
+      auto [propHandle, thisArg, methodNameForTrace] =
+          tryGetProperty(lock, targetInfo.target, params, targetInfo.allowInstanceProperties);
 
       addTrace(js, ctx, methodNameForTrace);
 
@@ -997,14 +1007,16 @@ public:
           callContext.setPipeline(builder.build());
         }
 
-        auto result = ctx.awaitJs(js, js.toPromise(invocationResult.returnValue)
-            .then(js, ctx.addFunctor(
-                [callContext, ownCallContext = kj::mv(ownCallContext),
-                 paramDisposalGroup = kj::mv(invocationResult.paramDisposalGroup),
-                 paramsStreamSink = kj::mv(invocationResult.streamSink),
-                 resultStreamSink = params.getResultsStreamSink(),
-                 callPipelineFulfiller = kj::mv(callPipelineFulfiller)]
-                (jsg::Lock& js, jsg::Value value) mutable {
+        auto result = ctx.awaitJs(js,
+            js.toPromise(invocationResult.returnValue)
+                .then(js,
+                    ctx.addFunctor(
+                        [callContext, ownCallContext = kj::mv(ownCallContext),
+                            paramDisposalGroup = kj::mv(invocationResult.paramDisposalGroup),
+                            paramsStreamSink = kj::mv(invocationResult.streamSink),
+                            resultStreamSink = params.getResultsStreamSink(),
+                            callPipelineFulfiller = kj::mv(callPipelineFulfiller)](
+                            jsg::Lock& js, jsg::Value value) mutable {
           jsg::JsValue resultValue(value.getHandle(js));
 
           // Call makeCallPipeline before serializing becaues it may need to extract the disposer.
@@ -1035,8 +1047,9 @@ public:
               KJ_ASSERT(external.isRpcTarget());
               results.setCallPipeline(external.getRpcTarget());
             }
-            KJ_CASE_ONEOF(obj, MakeCallPipeline::NonPipelinable) {
-              // No callPipeline is needed.
+            KJ_CASE_ONEOF(nonPipelinable, MakeCallPipeline::NonPipelinable) {
+              results.setCallPipeline(kj::mv(nonPipelinable.errorPipeline));
+              // leave hasDisposer false
             }
           }
 
@@ -1051,7 +1064,8 @@ public:
           // paramDisposalGroup will be destroyed when we return (or when this lambda is destroyed
           // as a result of the promise being rejected). This will implicitly dispose the param
           // stubs.
-        }), ctx.addFunctor([callPipelineFulfillerRef](jsg::Lock& js, jsg::Value&& error) {
+        }),
+                    ctx.addFunctor([callPipelineFulfillerRef](jsg::Lock& js, jsg::Value&& error) {
           // If we set up a `callPipeline` early, we have to make sure it propagates the error.
           // (Otherwise we get a PromiseFulfiller error instead, which is pretty useless...)
           KJ_IF_SOME(cpf, callPipelineFulfillerRef) {
@@ -1082,8 +1096,8 @@ public:
 
           InvocationResult invocationResult;
           KJ_IF_SOME(envCtx, targetInfo.envCtx) {
-            invocationResult = invokeFnInsertingEnvCtx(js, methodNameForTrace, fn, thisArg,
-                args, envCtx.env, envCtx.ctx);
+            invocationResult = invokeFnInsertingEnvCtx(
+                js, methodNameForTrace, fn, thisArg, args, envCtx.env, envCtx.ctx);
           } else {
             invocationResult = invokeFn(js, fn, thisArg, args);
           }
@@ -1116,11 +1130,8 @@ public:
     // we add the promise as a task on the context itself, and use a separate promise fulfiller to
     // wait on the result.
     auto paf = kj::newPromiseAndFulfiller<void>();
-    promise = promise.then([&fulfiller=*paf.fulfiller]() {
-      fulfiller.fulfill();
-    }, [&fulfiller=*paf.fulfiller](kj::Exception&& e) {
-      fulfiller.reject(kj::mv(e));
-    });
+    promise = promise.then([&fulfiller = *paf.fulfiller]() { fulfiller.fulfill(); },
+        [&fulfiller = *paf.fulfiller](kj::Exception&& e) { fulfiller.reject(kj::mv(e)); });
     promise = promise.attach(kj::defer([fulfiller = kj::mv(paf.fulfiller)]() mutable {
       if (fulfiller->isWaiting()) {
         fulfiller->reject(JSG_KJ_EXCEPTION(FAILED, Error,
@@ -1135,10 +1146,10 @@ public:
 
   KJ_DISALLOW_COPY_AND_MOVE(JsRpcTargetBase);
 
-protected:
+ protected:
   kj::Own<IoContext::WeakRef> weakIoContext;
 
-private:
+ private:
   // Returns true if the given name cannot be used as a method on this type.
   virtual bool isReservedName(kj::StringPtr name) = 0;
 
@@ -1155,12 +1166,11 @@ private:
   };
 
   [[noreturn]] static void failLookup(kj::StringPtr kjName) {
-    JSG_FAIL_REQUIRE(TypeError,
-        kj::str("The RPC receiver does not implement the method \"", kjName, "\"."));
+    JSG_FAIL_REQUIRE(
+        TypeError, kj::str("The RPC receiver does not implement the method \"", kjName, "\"."));
   }
 
-  GetPropResult tryGetProperty(
-      jsg::Lock& js,
+  GetPropResult tryGetProperty(jsg::Lock& js,
       jsg::JsObject object,
       rpc::JsRpcTarget::CallParams::Reader callParams,
       bool allowInstanceProperties) {
@@ -1245,7 +1255,7 @@ private:
             }
           }
 
-          result = getProperty(path[n-1]);
+          result = getProperty(path[n - 1]);
           methodNameForTrace = kj::ConstString(kj::strArray(path, "."));
         }
 
@@ -1267,8 +1277,7 @@ private:
   };
 
   // Deserializes the arguments and passes them to the given function.
-  static InvocationResult invokeFn(
-      jsg::Lock& js,
+  static InvocationResult invokeFn(jsg::Lock& js,
       v8::Local<v8::Function> fn,
       v8::Local<v8::Object> thisArg,
       kj::Maybe<rpc::JsValue::Reader> args) {
@@ -1276,17 +1285,17 @@ private:
     KJ_IF_SOME(a, args) {
       auto [value, disposalGroup, streamSink] = deserializeJsValue(js, a);
       auto args = KJ_REQUIRE_NONNULL(
-          value.tryCast<jsg::JsArray>(),
-          "expected JsArray when deserializing arguments.");
+          value.tryCast<jsg::JsArray>(), "expected JsArray when deserializing arguments.");
       // Call() expects a `Local<Value> []`... so we populate an array.
-      KJ_STACK_ARRAY(v8::Local<v8::Value>, arguments, args.size(), 8, 8);
+
+      v8::LocalVector<v8::Value> arguments(js.v8Isolate, args.size());
       for (size_t i = 0; i < args.size(); ++i) {
         arguments[i] = args.get(js, i);
       }
 
-      InvocationResult result {
-        .returnValue = jsg::check(fn->Call(
-            js.v8Context(), thisArg, args.size(), arguments.begin())),
+      InvocationResult result{
+        .returnValue =
+            jsg::check(fn->Call(js.v8Context(), thisArg, arguments.size(), arguments.data())),
         .streamSink = kj::mv(streamSink),
       };
       if (!disposalGroup->empty()) {
@@ -1294,16 +1303,13 @@ private:
       }
       return result;
     } else {
-      return {
-        .returnValue = jsg::check(fn->Call(js.v8Context(), thisArg, 0, nullptr))
-      };
+      return {.returnValue = jsg::check(fn->Call(js.v8Context(), thisArg, 0, nullptr))};
     }
   };
 
   // Like `invokeFn`, but inject the `env` and `ctx` values between the first and second
   // parameters. Used for service bindings that use functional syntax.
-  static InvocationResult invokeFnInsertingEnvCtx(
-      jsg::Lock& js,
+  static InvocationResult invokeFnInsertingEnvCtx(jsg::Lock& js,
       kj::StringPtr methodName,
       v8::Local<v8::Function> fn,
       v8::Local<v8::Object> thisArg,
@@ -1341,8 +1347,7 @@ private:
       streamSink = kj::mv(ss);
 
       auto array = KJ_REQUIRE_NONNULL(
-          value.tryCast<jsg::JsArray>(),
-          "expected JsArray when deserializing arguments.");
+          value.tryCast<jsg::JsArray>(), "expected JsArray when deserializing arguments.");
       argCountFromClient = array.size();
       argsArrayFromClient = kj::mv(array);
 
@@ -1356,20 +1361,20 @@ private:
     // will be replaced with `env` and `ctx`. Probably this would be quickly noticed in testing,
     // but if you were to accidentally reflect `env` back to the client, it would be a severe
     // security flaw.
-    JSG_REQUIRE(arity == 3, TypeError,
-        "Cannot call handler function \"", methodName, "\" over RPC because it has the wrong "
+    JSG_REQUIRE(arity == 3, TypeError, "Cannot call handler function \"", methodName,
+        "\" over RPC because it has the wrong "
         "number of arguments. A simple function handler can only be called over RPC if it has "
         "exactly the arguments (arg, env, ctx), where only the first argument comes from the "
         "client. To support multi-argument RPC functions, use class-based syntax (extending "
         "WorkerEntrypoint) instead.");
-    JSG_REQUIRE(argCountFromClient == 1, TypeError,
-        "Attempted to call RPC function \"", methodName, "\" with the wrong number of arguments. "
+    JSG_REQUIRE(argCountFromClient == 1, TypeError, "Attempted to call RPC function \"", methodName,
+        "\" with the wrong number of arguments. "
         "When calling a top-level handler function that is not declared as part of a class, you "
         "must always send exactly one argument. In order to support variable numbers of "
         "arguments, the server must use class-based syntax (extending WorkerEntrypoint) "
         "instead.");
 
-    KJ_STACK_ARRAY(v8::Local<v8::Value>, arguments, kj::max(argCountFromClient + 2, arity), 8, 8);
+    v8::LocalVector<v8::Value> arguments(js.v8Isolate, kj::max(argCountFromClient + 2, arity));
 
     for (auto i: kj::zeroTo(arity - 2)) {
       if (argCountFromClient > i) {
@@ -1389,8 +1394,8 @@ private:
     }
 
     return {
-      .returnValue = jsg::check(fn->Call(
-          js.v8Context(), thisArg, arguments.size(), arguments.begin())),
+      .returnValue =
+          jsg::check(fn->Call(js.v8Context(), thisArg, arguments.size(), arguments.data())),
       .paramDisposalGroup = kj::mv(paramDisposalGroup),
       .streamSink = kj::mv(streamSink),
     };
@@ -1398,9 +1403,9 @@ private:
 };
 
 class TransientJsRpcTarget final: public JsRpcTargetBase {
-public:
-  TransientJsRpcTarget(jsg::Lock& js, IoContext& ioCtx, jsg::JsObject object,
-                       bool allowInstanceProperties = false)
+ public:
+  TransientJsRpcTarget(
+      jsg::Lock& js, IoContext& ioCtx, jsg::JsObject object, bool allowInstanceProperties = false)
       : JsRpcTargetBase(ioCtx),
         handles(ioCtx.addObjectReverse(kj::heap<Handles>(js, object, kj::none))),
         allowInstanceProperties(allowInstanceProperties),
@@ -1414,9 +1419,11 @@ public:
   }
 
   // Use this version of the constructor to pass the dispose function separately.
-  TransientJsRpcTarget(jsg::Lock& js, IoContext& ioCtx, jsg::JsObject object,
-                       kj::Maybe<v8::Local<v8::Function>> dispose,
-                       bool allowInstanceProperties = false)
+  TransientJsRpcTarget(jsg::Lock& js,
+      IoContext& ioCtx,
+      jsg::JsObject object,
+      kj::Maybe<v8::Local<v8::Function>> dispose,
+      bool allowInstanceProperties = false)
       : JsRpcTargetBase(ioCtx),
         handles(ioCtx.addObjectReverse(kj::heap<Handles>(js, object, dispose))),
         allowInstanceProperties(allowInstanceProperties),
@@ -1430,8 +1437,7 @@ public:
         ctx.addTask(ctx.run(
             [dispose = kj::mv(d), object = kj::mv(handles->object)](Worker::Lock& lock) mutable {
           jsg::Lock& js = lock;
-          jsg::check(dispose.getHandle(js)->Call(
-              js.v8Context(), object.getHandle(js), 0, nullptr));
+          jsg::check(dispose.getHandle(js)->Call(js.v8Context(), object.getHandle(js), 0, nullptr));
         }));
       }
     }
@@ -1445,7 +1451,7 @@ public:
     };
   }
 
-private:
+ private:
   struct Handles {
     jsg::JsRef<jsg::JsObject> object;
     kj::Maybe<jsg::V8Ref<v8::Function>> dispose;
@@ -1475,7 +1481,7 @@ private:
   kj::Own<void> pendingEvent;
 
   bool isReservedName(kj::StringPtr name) override {
-    if (// dup() is reserved to duplicate the stub itself, pointing to the same object.
+    if (  // dup() is reserved to duplicate the stub itself, pointing to the same object.
         name == "dup" ||
 
         // All JS classes define a method `constructor` on the prototype, but we don't actually
@@ -1496,14 +1502,19 @@ static rpc::JsRpcTarget::Client makeJsRpcTargetForSingleLoopbackCall(
     jsg::Lock& js, jsg::JsObject obj) {
   // We intentionally do not want to hook up the disposer here since we're not taking ownership
   // of the object.
-  return rpc::JsRpcTarget::Client(kj::heap<TransientJsRpcTarget>(
-      js, IoContext::current(), obj, kj::none, true));
+  return rpc::JsRpcTarget::Client(
+      kj::heap<TransientJsRpcTarget>(js, IoContext::current(), obj, kj::none, true));
 }
 
 static MakeCallPipeline::Result makeCallPipeline(jsg::Lock& js, jsg::JsValue value) {
   return js.withinHandleScope([&]() -> MakeCallPipeline::Result {
     jsg::JsObject obj = KJ_UNWRAP_OR(value.tryCast<jsg::JsObject>(), {
-      return MakeCallPipeline::NonPipelinable();
+      // Primitive value. Return a fake pipeline just so that we get nice errors if someone tries
+      // to pipeline on it. (If we return null, we'll get "called null capability" out of
+      // Cap'n Proto, which will be treated as an internal error.)
+      return (MakeCallPipeline::NonPipelinable{
+        .errorPipeline = rpc::JsRpcTarget::Client(
+            kj::heap<TransientJsRpcTarget>(js, IoContext::current(), js.obj(), kj::none, true))});
     });
 
     if (obj.getPrototype(js) == js.obj().getPrototype(js)) {
@@ -1518,11 +1529,10 @@ static MakeCallPipeline::Result makeCallPipeline(jsg::Lock& js, jsg::JsValue val
       // that a new `dispose()` method will always be added on the client side).
       obj.delete_(js, js.symbolDispose());
 
-      return MakeCallPipeline::Object {
-        .cap = rpc::JsRpcTarget::Client(kj::heap<TransientJsRpcTarget>(
-            js, IoContext::current(), obj, maybeDispose, true)),
-        .hasDispose = maybeDispose != kj::none
-      };
+      return MakeCallPipeline::Object{
+        .cap = rpc::JsRpcTarget::Client(
+            kj::heap<TransientJsRpcTarget>(js, IoContext::current(), obj, maybeDispose, true)),
+        .hasDispose = maybeDispose != kj::none};
     } else if (obj.isInstanceOf<JsRpcStub>(js)) {
       // It's just a stub. It'll serialize as a single stub, obviously.
       return MakeCallPipeline::SingleStub();
@@ -1534,9 +1544,12 @@ static MakeCallPipeline::Result makeCallPipeline(jsg::Lock& js, jsg::JsValue val
       return MakeCallPipeline::SingleStub();
     } else {
       // Not an RPC object. Could be a String or other serializable types that derive from Object.
+      // Similar to primitive types, we return a fake pipeline for error-handling reasons.
       // TODO(soon): What if someone returns e.g. a Map with a disposer on it? Should we honor that
       //   disposer?
-      return MakeCallPipeline::NonPipelinable();
+      return MakeCallPipeline::NonPipelinable{
+        .errorPipeline = rpc::JsRpcTarget::Client(
+            kj::heap<TransientJsRpcTarget>(js, IoContext::current(), js.obj(), kj::none, true))};
     }
   });
 }
@@ -1580,30 +1593,94 @@ void RpcSerializerExternalHander::serializeFunction(
     jsg::Lock& js, jsg::Serializer& serializer, v8::Local<v8::Function> func) {
   serializer.writeRawUint32(static_cast<uint>(rpc::SerializationTag::JS_RPC_STUB));
 
-  rpc::JsRpcTarget::Client cap = kj::heap<TransientJsRpcTarget>(
-      js, IoContext::current(), jsg::JsObject(func), true);
+  rpc::JsRpcTarget::Client cap =
+      kj::heap<TransientJsRpcTarget>(js, IoContext::current(), jsg::JsObject(func), true);
   write([cap = kj::mv(cap)](rpc::JsValue::External::Builder builder) mutable {
     builder.setRpcTarget(kj::mv(cap));
+  });
+}
+
+void RpcSerializerExternalHander::serializeProxy(
+    jsg::Lock& js, jsg::Serializer& serializer, v8::Local<v8::Proxy> proxy) {
+  js.withinHandleScope([&]() {
+    auto handle = jsg::JsObject(proxy);
+
+    // Proxies are only allowed to wrap objects that would normally be serialized by writing a
+    // stub, e.g. plain objects and RpcTargets. In such cases, we can write a stub pointing to the
+    // proxy.
+    //
+    // However, note that we don't actually want to test the Proxy's *target* directly, because
+    // it's possible the Proxy is trying to disguise the target as something else. Instead, we must
+    // determine the type by following the prototype chain. That way, if the Proxy overrides
+    // getPrototype(), we will honor that override.
+    //
+    // Note that we don't support functions. This is because our isFunctionForRpc() check is not
+    // prototype-based, and as such it's unclear how exactly we should go about checking for a
+    // function here. Luckily, you really don't need to use a `Proxy` to wrap a function... you
+    // can just use a function.
+
+    // TODO(perf): We should really cache `prototypeOfObject` somewhere so we don't have to create
+    //   an object to get it. (We do this other places in this file, too...)
+    auto prototypeOfObject = KJ_ASSERT_NONNULL(js.obj().getPrototype(js).tryCast<jsg::JsObject>());
+    auto prototypeOfRpcTarget = js.getPrototypeFor<JsRpcTarget>();
+    bool allowInstanceProperties = false;
+    auto proto = handle.getPrototype(js);
+    if (proto == prototypeOfObject) {
+      // A regular object. Allow access to instance properties.
+      allowInstanceProperties = true;
+    } else {
+      // Walk the prototype chain looking for RpcTarget.
+      for (;;) {
+        if (proto == prototypeOfRpcTarget) {
+          // An RpcTarget, don't allow instance properties.
+          allowInstanceProperties = false;
+          break;
+        }
+
+        KJ_IF_SOME(protoObj, proto.tryCast<jsg::JsObject>()) {
+          proto = protoObj.getPrototype(js);
+        } else {
+          // End of prototype chain, and didn't find RpcTarget.
+          JSG_FAIL_REQUIRE(DOMDataCloneError,
+              "Proxy could not be serialized because it is not a valid RPC receiver type. The "
+              "Proxy must emulate either a plain object or an RpcTarget, as indicated by the "
+              "Proxy's prototype chain.");
+        }
+      }
+    }
+
+    // Great, we've concluded we can indeed point a stub at this proxy.
+    serializer.writeRawUint32(static_cast<uint>(rpc::SerializationTag::JS_RPC_STUB));
+
+    rpc::JsRpcTarget::Client cap =
+        kj::heap<TransientJsRpcTarget>(js, IoContext::current(), handle, allowInstanceProperties);
+    write([cap = kj::mv(cap)](rpc::JsValue::External::Builder builder) mutable {
+      builder.setRpcTarget(kj::mv(cap));
+    });
   });
 }
 
 // JsRpcTarget implementation specific to entrypoints. This is used to deliver the first, top-level
 // call of an RPC session.
 class EntrypointJsRpcTarget final: public JsRpcTargetBase {
-public:
-  EntrypointJsRpcTarget(IoContext& ioCtx, kj::Maybe<kj::StringPtr> entrypointName,
-                        kj::Maybe<kj::Own<WorkerTracer>> tracer)
+ public:
+  EntrypointJsRpcTarget(IoContext& ioCtx,
+      kj::Maybe<kj::StringPtr> entrypointName,
+      Frankenvalue props,
+      kj::Maybe<kj::Own<WorkerTracer>> tracer)
       : JsRpcTargetBase(ioCtx),
         // Most of the time we don't really have to clone this but it's hard to fully prove, so
         // let's be safe.
         entrypointName(entrypointName.map([](kj::StringPtr s) { return kj::str(s); })),
+        props(kj::mv(props)),
         tracer(kj::mv(tracer)) {}
 
   TargetInfo getTargetInfo(Worker::Lock& lock, IoContext& ioCtx) override {
     jsg::Lock& js = lock;
 
-    auto handler = KJ_REQUIRE_NONNULL(lock.getExportedHandler(entrypointName, ioCtx.getActor()),
-                                      "Failed to get handler to worker.");
+    auto handler =
+        KJ_REQUIRE_NONNULL(lock.getExportedHandler(entrypointName, kj::mv(props), ioCtx.getActor()),
+            "Failed to get handler to worker.");
 
     if (handler->missingSuperclass) {
       // JS RPC is not enabled on the server side, we cannot call any methods.
@@ -1614,16 +1691,13 @@ public:
           "\"cloudflare:workers\".");
     }
 
-    TargetInfo targetInfo {
-      .target = jsg::JsObject(handler->self.getHandle(lock)),
+    TargetInfo targetInfo{.target = jsg::JsObject(handler->self.getHandle(lock)),
       .envCtx = handler->ctx.map([&](jsg::Ref<ExecutionContext>& execCtx) -> EnvCtx {
-        return {
-          .env = handler->env.getHandle(js),
-          .ctx = lock.getWorker().getIsolate().getApi()
-              .wrapExecutionContext(js, execCtx.addRef()),
-        };
-      })
-    };
+      return {
+        .env = handler->env.getHandle(js),
+        .ctx = lock.getWorker().getIsolate().getApi().wrapExecutionContext(js, execCtx.addRef()),
+      };
+    })};
 
     // `targetInfo.envCtx` is present when we're invoking a freestanding function, and therefore
     // `env` and `ctx` need to be passed as parameters. In that case, we our method lookup
@@ -1636,20 +1710,18 @@ public:
     return targetInfo;
   }
 
-private:
+ private:
   kj::Maybe<kj::String> entrypointName;
+  Frankenvalue props;
   kj::Maybe<kj::Own<WorkerTracer>> tracer;
 
   bool isReservedName(kj::StringPtr name) override {
-    if (// "fetch" and "connect" are treated specially on entrypoints.
-        name == "fetch" ||
-        name == "connect" ||
+    if (  // "fetch" and "connect" are treated specially on entrypoints.
+        name == "fetch" || name == "connect" ||
 
         // These methods are reserved by the Durable Objects implementation.
         // TODO(someday): Should they be reserved only for Durable Objects, not WorkerEntrypoint?
-        name == "alarm" ||
-        name == "webSocketMessage" ||
-        name == "webSocketClose" ||
+        name == "alarm" || name == "webSocketMessage" || name == "webSocketClose" ||
         name == "webSocketError" ||
 
         // dup() is reserved to duplicate the stub itself, pointing to the same object.
@@ -1665,8 +1737,12 @@ private:
 
   void addTrace(jsg::Lock& js, IoContext& ioctx, kj::StringPtr methodName) override {
     KJ_IF_SOME(t, tracer) {
-      t->setEventInfo(ioctx.now(), Trace::JsRpcEventInfo(kj::str(methodName)));
+      t->setEventInfo(ioctx.now(), tracing::JsRpcEventInfo(kj::str(methodName)));
     }
+    ioctx.getMetrics().reportTailEvent(ioctx, [&] {
+      return tracing::Onset(
+          tracing::JsRpcEventInfo(kj::str(methodName)), tracing::Onset::WorkerInfo{}, kj::none);
+    });
   }
 };
 
@@ -1677,22 +1753,22 @@ private:
 // completes, since it is actually returned as the result of the top-level RPC call, but that
 // call doesn't return until the `CompletionMembrane` says all capabilities were dropped, so this
 // would create a cycle.
-class JsRpcSessionCustomEventImpl::ServerTopLevelMembrane final
-    : public capnp::MembranePolicy, public kj::Refcounted {
-public:
+class JsRpcSessionCustomEventImpl::ServerTopLevelMembrane final: public capnp::MembranePolicy,
+                                                                 public kj::Refcounted {
+ public:
   explicit ServerTopLevelMembrane(kj::Own<kj::PromiseFulfiller<void>> doneFulfiller)
       : doneFulfiller(kj::mv(doneFulfiller)) {}
   ~ServerTopLevelMembrane() noexcept(false) {
     KJ_IF_SOME(f, doneFulfiller) {
-      f->reject(KJ_EXCEPTION(DISCONNECTED,
-          "JS RPC session canceled without calling an RPC method."));
+      f->reject(
+          KJ_EXCEPTION(DISCONNECTED, "JS RPC session canceled without calling an RPC method."));
     }
   }
 
   kj::Maybe<capnp::Capability::Client> inboundCall(
       uint64_t interfaceId, uint16_t methodId, capnp::Capability::Client target) override {
-    auto f = kj::mv(JSG_REQUIRE_NONNULL(doneFulfiller,
-        Error, "Only one RPC method call is allowed on this object."));
+    auto f = kj::mv(JSG_REQUIRE_NONNULL(
+        doneFulfiller, Error, "Only one RPC method call is allowed on this object."));
     doneFulfiller = kj::none;
     return capnp::membrane(kj::mv(target), kj::refcounted<CompletionMembrane>(kj::mv(f)));
   }
@@ -1706,13 +1782,14 @@ public:
     return kj::addRef(*this);
   }
 
-private:
+ private:
   kj::Maybe<kj::Own<kj::PromiseFulfiller<void>>> doneFulfiller;
 };
 
 kj::Promise<WorkerInterface::CustomEvent::Result> JsRpcSessionCustomEventImpl::run(
     kj::Own<IoContext::IncomingRequest> incomingRequest,
     kj::Maybe<kj::StringPtr> entrypointName,
+    Frankenvalue props,
     kj::TaskSet& waitUntilTasks) {
   IoContext& ioctx = incomingRequest->getContext();
 
@@ -1720,9 +1797,8 @@ kj::Promise<WorkerInterface::CustomEvent::Result> JsRpcSessionCustomEventImpl::r
 
   auto [donePromise, doneFulfiller] = kj::newPromiseAndFulfiller<void>();
   capFulfiller->fulfill(
-      capnp::membrane(
-          kj::heap<EntrypointJsRpcTarget>(ioctx, entrypointName,
-              mapAddRef(incomingRequest->getWorkerTracer())),
+      capnp::membrane(kj::heap<EntrypointJsRpcTarget>(ioctx, entrypointName, kj::mv(props),
+                          mapAddRef(incomingRequest->getWorkerTracer())),
           kj::refcounted<ServerTopLevelMembrane>(kj::mv(doneFulfiller))));
 
   KJ_DEFER({
@@ -1735,16 +1811,12 @@ kj::Promise<WorkerInterface::CustomEvent::Result> JsRpcSessionCustomEventImpl::r
   // and server as part of this session.
   co_await donePromise.exclusiveJoin(ioctx.onAbort());
 
-  co_return WorkerInterface::CustomEvent::Result {
-    .outcome = EventOutcome::OK
-  };
+  co_return WorkerInterface::CustomEvent::Result{.outcome = EventOutcome::OK};
 }
 
-kj::Promise<WorkerInterface::CustomEvent::Result>
-  JsRpcSessionCustomEventImpl::sendRpc(
+kj::Promise<WorkerInterface::CustomEvent::Result> JsRpcSessionCustomEventImpl::sendRpc(
     capnp::HttpOverCapnpFactory& httpOverCapnpFactory,
     capnp::ByteStreamFactory& byteStreamFactory,
-    kj::TaskSet& waitUntilTasks,
     rpc::EventDispatcher::Client dispatcher) {
   // We arrange to revoke all capabilities in this session as soon as `sendRpc()` completes or is
   // canceled. Normally, the server side doesn't return if any capabilities still exist, so this
@@ -1765,9 +1837,7 @@ kj::Promise<WorkerInterface::CustomEvent::Result>
 
   rpc::JsRpcTarget::Client cap = sent.getTopLevel();
 
-  cap = capnp::membrane(
-      kj::mv(cap),
-      kj::refcounted<RevokerMembrane>(kj::mv(revokePaf.promise)));
+  cap = capnp::membrane(kj::mv(cap), kj::refcounted<RevokerMembrane>(kj::mv(revokePaf.promise)));
 
   // When no more capabilities exist on the connection, we want to proactively cancel the RPC.
   // This is needed in particular for the case where the client is dropped without making any calls
@@ -1781,8 +1851,7 @@ kj::Promise<WorkerInterface::CustomEvent::Result>
   //   less ugly?
   auto completionPaf = kj::newPromiseAndFulfiller<void>();
   cap = capnp::membrane(
-      kj::mv(cap),
-      kj::refcounted<CompletionMembrane>(kj::mv(completionPaf.fulfiller)));
+      kj::mv(cap), kj::refcounted<CompletionMembrane>(kj::mv(completionPaf.fulfiller)));
 
   this->capFulfiller->fulfill(kj::mv(cap));
 
@@ -1796,16 +1865,15 @@ kj::Promise<WorkerInterface::CustomEvent::Result>
     kj::throwFatalException(kj::mv(e));
   }
 
-  co_return WorkerInterface::CustomEvent::Result {
-    .outcome = EventOutcome::OK
-  };
+  co_return WorkerInterface::CustomEvent::Result{.outcome = EventOutcome::OK};
 }
 
 // =======================================================================================
 
 jsg::Ref<WorkerEntrypoint> WorkerEntrypoint::constructor(
     const v8::FunctionCallbackInfo<v8::Value>& args,
-    jsg::Ref<ExecutionContext> ctx, jsg::JsObject env) {
+    jsg::Ref<ExecutionContext> ctx,
+    jsg::JsObject env) {
   // HACK: We take `FunctionCallbackInfo` mostly so that we can set properties directly on
   //   `This()`. There ought to be a better way to get access to `this` in a constructor.
   //   We *also* delcare `ctx` and `env` params more explicitly just for the sake of type checking.
@@ -1819,7 +1887,8 @@ jsg::Ref<WorkerEntrypoint> WorkerEntrypoint::constructor(
 
 jsg::Ref<DurableObjectBase> DurableObjectBase::constructor(
     const v8::FunctionCallbackInfo<v8::Value>& args,
-    jsg::Ref<DurableObjectState> ctx, jsg::JsObject env) {
+    jsg::Ref<DurableObjectState> ctx,
+    jsg::JsObject env) {
   // HACK: We take `FunctionCallbackInfo` mostly so that we can set properties directly on
   //   `This()`. There ought to be a better way to get access to `this` in a constructor.
   //   We *also* delcare `ctx` and `env` params more explicitly just for the sake of type checking.
@@ -1831,4 +1900,19 @@ jsg::Ref<DurableObjectBase> DurableObjectBase::constructor(
   return jsg::alloc<DurableObjectBase>();
 }
 
-}; // namespace workerd::api
+jsg::Ref<WorkflowEntrypoint> WorkflowEntrypoint::constructor(
+    const v8::FunctionCallbackInfo<v8::Value>& args,
+    jsg::Ref<ExecutionContext> ctx,
+    jsg::JsObject env) {
+  // HACK: We take `FunctionCallbackInfo` mostly so that we can set properties directly on
+  //   `This()`. There ought to be a better way to get access to `this` in a constructor.
+  //   We *also* declare `ctx` and `env` params more explicitly just for the sake of type checking.
+  jsg::Lock& js = jsg::Lock::from(args.GetIsolate());
+
+  jsg::JsObject self(args.This());
+  self.set(js, "ctx", jsg::JsValue(args[0]));
+  self.set(js, "env", jsg::JsValue(args[1]));
+  return jsg::alloc<WorkflowEntrypoint>();
+}
+
+};  // namespace workerd::api

@@ -1,0 +1,233 @@
+{
+  "$schema": "deps.schema.json",
+  "repositories": [
+    {
+      "name": "bazel_skylib",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "bazel-skylib",
+      "file_regex": "\\.tar\\.gz$"
+    },
+    {
+      "name": "rules_python",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "rules_python",
+      "file_regex": "\\.tar\\.gz$"
+    },
+    {
+      // Needed for objc_library starting with bazel 7, used to build dawn on macOS
+      "name": "build_bazel_apple_support",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "apple_support",
+      "file_regex": "\\.tar\\.gz$"
+    },
+    // rust
+    {
+      "name": "rules_rust",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "rules_rust",
+      "file_regex": "^rules_rust.*\\.tar\\.gz$"
+    },
+    {
+      "name": "cargo_bazel_linux_x64",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "rules_rust",
+      "file_regex": "^cargo-bazel-x86_64-unknown-linux-gnu$",
+      "file_type": "executable"
+    },
+    {
+      "name": "cargo_bazel_linux_arm64",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "rules_rust",
+      "file_regex": "^cargo-bazel-aarch64-unknown-linux-gnu$",
+      "file_type": "executable"
+    },
+    {
+      "name": "cargo_bazel_macos_x64",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "rules_rust",
+      "file_regex": "^cargo-bazel-x86_64-apple-darwin$",
+      "file_type": "executable"
+    },
+    {
+      "name": "cargo_bazel_macos_arm64",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "rules_rust",
+      "file_regex": "^cargo-bazel-aarch64-apple-darwin$",
+      "file_type": "executable"
+    },
+    {
+      "name": "cargo_bazel_win_x64",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "rules_rust",
+      "file_regex": "^cargo-bazel-x86_64-pc-windows-msvc.exe$",
+      "file_type": "executable",
+      "downloaded_file_path": "downloaded.exe"
+    },
+    {
+      "name": "cxxbridge-cmd",
+      "type": "crate",
+      "build_file": "//deps/rust:BUILD.cxxbridge-cmd"
+    },
+    {
+      "name": "aspect_rules_esbuild",
+      "type": "github_release",
+      "owner": "aspect-build",
+      "repo": "rules_esbuild",
+      "file_regex": "\\.tar\\.gz$",
+      // All releases are marked as prerelease, so github_last_release() fails.
+      "freeze_version": "v0.21.0"
+    },
+    {
+      "name": "rules_pkg",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "rules_pkg",
+      "file_regex": "\\.tar\\.gz$"
+    },
+    {
+      // Needed for running the latest Node.js due to aspect_rules_js using older
+      // version by default
+      "name": "rules_nodejs",
+      "type": "github_release",
+      "owner": "bazel-contrib",
+      "repo": "rules_nodejs",
+      "file_regex": "\\.tar\\.gz$"
+    },
+    {
+      // Needed for aspect_rules_js, build fails on Windows if it is not fetched explicitly.
+      // rules_js 2.1.0 uses a fixed version, once we update to that version this can be dropped.
+      "name": "aspect_bazel_lib",
+      "type": "github_release",
+      "owner": "bazel-contrib",
+      "repo": "bazel-lib",
+      "file_regex": "^bazel-lib-"
+    },
+    {
+      "name": "aspect_rules_js",
+      "type": "github_release",
+      "owner": "aspect-build",
+      "repo": "rules_js",
+      "file_regex": "^rules_js-"
+    },
+    {
+      "name": "aspect_rules_ts",
+      "type": "github_release",
+      "owner": "aspect-build",
+      "repo": "rules_ts",
+      "file_regex": "^rules_ts-"
+    },
+    //buildifier
+    {
+      "name": "buildifier-linux-amd64",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "buildtools",
+      "file_regex": "^buildifier-linux-amd64$",
+      "file_type": "executable"
+    },
+    {
+      "name": "buildifier-linux-arm64",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "buildtools",
+      "file_regex": "^buildifier-linux-arm64$",
+      "file_type": "executable"
+    },
+    {
+      "name": "buildifier-darwin-amd64",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "buildtools",
+      "file_regex": "^buildifier-darwin-amd64$",
+      "file_type": "executable"
+    },
+    {
+      "name": "buildifier-darwin-arm64",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "buildtools",
+      "file_regex": "^buildifier-darwin-arm64$",
+      "file_type": "executable"
+    },
+    {
+      "name": "buildifier-windows-amd64",
+      "type": "github_release",
+      "owner": "bazelbuild",
+      "repo": "buildtools",
+      "file_regex": "^buildifier-windows-amd64.exe$",
+      "file_type": "executable"
+    },
+    //clang-format
+    {
+      "name": "clang-format-linux-amd64",
+      "type": "github_release",
+      "owner": "cloudflare",
+      "repo": "workerd-tools",
+      "file_regex": "llvm-.*-linux-amd64-clang-format",
+      "file_type": "executable",
+      "freeze_version": "llvm-18.1.8"
+    },
+    {
+      "name": "clang-format-linux-arm64",
+      "type": "github_release",
+      "owner": "cloudflare",
+      "repo": "workerd-tools",
+      "file_regex": "llvm-.*-linux-arm64-clang-format",
+      "file_type": "executable",
+      "freeze_version": "llvm-18.1.8"
+    },
+    {
+      "name": "clang-format-darwin-arm64",
+      "type": "github_release",
+      "owner": "cloudflare",
+      "repo": "workerd-tools",
+      "file_regex": "llvm-.*-darwin-arm64-clang-format",
+      "file_type": "executable",
+      "freeze_version": "llvm-18.1.8"
+    },
+    //ruff
+    {
+      "name": "ruff-darwin-arm64",
+      "type": "github_release",
+      "owner": "astral-sh",
+      "repo": "ruff",
+      "file_regex": "^ruff-aarch64-apple-darwin.tar.gz$",
+      "build_file_content": "filegroup(name='file', srcs=glob(['**']))"
+    },
+    {
+      "name": "ruff-linux-arm64",
+      "type": "github_release",
+      "owner": "astral-sh",
+      "repo": "ruff",
+      "file_regex": "^ruff-aarch64-unknown-linux-gnu.tar.gz$",
+      "build_file_content": "filegroup(name='file', srcs=glob(['**']))"
+    },
+    {
+      "name": "ruff-linux-amd64",
+      "type": "github_release",
+      "owner": "astral-sh",
+      "repo": "ruff",
+      "file_regex": "^ruff-x86_64-unknown-linux-gnu.tar.gz$",
+      "build_file_content": "filegroup(name='file', srcs=glob(['**']))"
+    },
+    //wpt
+    {
+      "name": "wpt",
+      "type": "github_release",
+      "owner": "cloudflare",
+      "repo": "workerd-tools",
+      "file_regex": "wpt-.*.tar.gz",
+      "build_file": "//:build/BUILD.wpt",
+      "freeze_version": "wpt-af83b77e2"
+     }
+  ]
+}

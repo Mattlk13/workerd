@@ -3,204 +3,114 @@ name: Tests
 on:
   pull_request:
     paths-ignore:
-    - 'doc/**'
+      - 'doc/**'
+  merge_group:
   push:
     branches:
-    - main
+      - main
+
+concurrency:
+  # Cancel existing builds for the same PR.
+  # Otherwise, all other builds will be allowed to run through.
+  group: test.yml-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
+  fixup:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/fixup.yml
+  labels:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/labels.yml
   test:
     strategy:
       matrix:
         os:
           [
-            { name : linux, image : ubuntu-20.04 },
-            { name : macOS, image : macos-13 },
-            { name : windows, image : windows-2022 }
+            { name: linux, image: ubuntu-22.04 },
+            { name: linux-arm, image: ubuntu-22.04-arm },
+            { name: macOS, image: macos-15 },
+            { name: windows, image: windows-2025 },
           ]
-        config:
-          [
+        config: [
             # Default build: no suffix or additional bazel arguments
-            { suffix: '', bazel-args: '' },
+            { suffix: '' },
             # Debug build
-            { suffix: -debug, bazel-args: --config=debug }
+            { suffix: -debug },
           ]
         include:
           # Add an Address Sanitizer (ASAN) build on Linux for additional checking.
-          - os:     { name: linux, image: ubuntu-20.04 }
-            config: { suffix: -asan, bazel-args: --config=asan }
-          # Windows has a custom non-debug bazel config.
-          # As of 7.2.1 support for Bazel remote cache BwoB is broken on Windows, likely due to
-          # disk I/O race conditions causing permission denied errors (this also happened in
-          # previous versions). Use remote_download_all for now.
-          - os:     { name : windows, image : windows-2022 }
-            config: { suffix: '', bazel-args: "--config=windows_no_dbg --remote_download_all" }
+          - os: { name: linux, image: ubuntu-22.04 }
+            config: { suffix: -asan }
           # TODO (later): The custom Windows-debug configuration consistently runs out of disk
           # space on CI, disable it for now. Once https://github.com/bazelbuild/bazel/issues/21615
           # has been resolved we can likely re-enable it and possibly fold up the custom
           # configurations, as we can more easily disable PDB file generation.
-          # - os:     { name : windows, image : windows-2022 }
+          # - os:     { name : windows, image : windows-2025 }
           #   config: { suffix: -debug, bazel-args: --config=windows_dbg }
         exclude:
-          # Skip the matrix generated Windows non-debug config to use the one added above.
-          - os:     { name : windows, image : windows-2022 }
-            config: { suffix: '', bazel-args: '' }
-          - os:     { name : windows, image : windows-2022 }
-            config: { suffix: -debug, bazel-args: --config=debug }
-          # due to resource constraints, exclude the macOS-debug runner for now. linux-debug and
-          # linux-asan should provide sufficient coverage for building in the debug configuration.
-          - os:     { name : macOS, image : macos-13 }
-            config: { suffix: -debug, bazel-args: --config=debug }
+          - os: { name: windows, image: windows-2025 }
+            config: { suffix: -debug }
+          # due to resource constraints, exclude the macOS and x64 Linux debug runners for now.
+          # linux-asan and arm64 linux-debug should provide sufficient coverage for building in the
+          # debug configuration.
+          - os: { name: macOS, image: macos-15 }
+            config: { suffix: -debug }
+          - os: { name: linux, image: ubuntu-22.04 }
+            config: { suffix: -debug }
       fail-fast: false
-    runs-on: ${{ matrix.os.image }}
-    name: test (${{ matrix.os.name }}${{ matrix.config.suffix }})
+    uses: ./.github/workflows/_bazel.yml
+    with:
+      image: ${{ matrix.os.image }}
+      os_name: ${{ matrix.os.name }}
+      suffix: ${{ matrix.config.suffix }}
+      extra_bazel_args: '--config=ci-test'
+    secrets:
+      BAZEL_CACHE_KEY: ${{ secrets.BAZEL_CACHE_KEY }}
+      WORKERS_MIRROR_URL: ${{ secrets.WORKERS_MIRROR_URL }}
+  lint:
+    uses: ./.github/workflows/_bazel.yml
+    with:
+      extra_bazel_args: '--config=lint --config=ci-test'
+      run_tests: false
+    secrets:
+      BAZEL_CACHE_KEY: ${{ secrets.BAZEL_CACHE_KEY }}
+      WORKERS_MIRROR_URL: ${{ secrets.WORKERS_MIRROR_URL }}
+
+  workers-sdk-test:
+    needs: test
+    name: Run workers-sdk tests
+    runs-on: ubuntu-22.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout workers-sdk
+        uses: actions/checkout@v4
         with:
-          show-progress: false
-      - name: Cache
-        id: cache
-        uses: actions/cache@v4
+          repository: cloudflare/workers-sdk
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+      - name: Use Node.js
+        uses: actions/setup-node@v4
         with:
-          path: ~/bazel-disk-cache
-          key: bazel-disk-cache-${{ matrix.os.name }}-${{ runner.arch }}${{ matrix.config.suffix }}-${{ hashFiles('.bazelversion', '.bazelrc', 'WORKSPACE') }}
-          # Intentionally not reusing an older cache entry using a key prefix, bazel frequently
-          # ends up with a larger cache at the end when starting with an available cache entry,
-          # resulting in a snowballing cache size and cache download/upload times.
-      - name: Setup Linux
-        if: matrix.os.name == 'linux'
-        # Install dependencies, including clang through the LLVM APT repository. We drop the
-        # install step so we can install just the packages we need.
-        # libunwind, libc++abi1 and libc++1 should be automatically installed as dependencies of
-        # libc++, but this appears to cause errors so they are also being explicitly installed.
-        # Since the GitHub runner image comes with a number of preinstalled packages, we don't need
-        # to use APT much otherwise.
-        # TODO(cleanup): Upgrade this to LLVM 16 as soon as it is available on the latest Ubuntu
-        # LTS release. Debian includes LLVM 16 since the Bookworm 12.4 point release.
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          wget https://apt.llvm.org/llvm.sh
-          sed -i '/apt-get install/d' llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 15
-          sudo apt-get install -y --no-install-recommends clang-15 lld-15 libunwind-15 libc++abi1-15 libc++1-15 libc++-15-dev libclang-rt-15-dev
-          echo "build:linux --action_env=CC=/usr/lib/llvm-15/bin/clang --action_env=CXX=/usr/lib/llvm-15/bin/clang++" >> .bazelrc
-          echo "build:linux --host_action_env=CC=/usr/lib/llvm-15/bin/clang --host_action_env=CXX=/usr/lib/llvm-15/bin/clang++" >> .bazelrc
-          sed -i -e "s%llvm-symbolizer%/usr/lib/llvm-15/bin/llvm-symbolizer%" .bazelrc
-      - name: Setup macOS
-        if: matrix.os.name == 'macOS'
-        # TODO: We want to symbolize stacks for crashes on CI. Xcode is currently based on LLVM 16
-        # and the macos-13 image has llvm@15 installed:
-        # https://github.com/actions/runner-images/blob/main/images/macos/macos-13-Readme.md
-        #
-        # Not enabled because symbolication does not work on workerd macOS builds yet and running
-        # llvm-symbolizer in the currently broken state causes some tests to time out on the
-        # runner.
-        # Use latest available Xcode version – runner still defaults to 15.0.1.
-        run: |
-          sudo xcode-select -s "/Applications/Xcode_15.1.app"
-          # export LLVM_SYMBOLIZER=$(brew --prefix llvm@15)/bin/llvm-symbolizer
-          # sed -i -e "s%llvm-symbolizer%${LLVM_SYMBOLIZER}%" .bazelrc
-      - name: Setup Windows
-        if: matrix.os.name == 'windows'
-        # Set a custom output root directory to avoid long file name issues.
-        run: |
-          [System.IO.File]::WriteAllLines((Join-Path -Path $env:USERPROFILE -ChildPath '.bazelrc'), 'startup --output_user_root=C:/tmp')
-      - name: Configure download mirrors
-        shell: bash
-        run: |
-          if [ ! -z "${{ secrets.WORKERS_MIRROR_URL }}" ] ; then
-            # Strip comment in front of WORKERS_MIRROR_URL, then substitute secret to use it.
-            sed -e '/WORKERS_MIRROR_URL/ { s@# *@@; s@WORKERS_MIRROR_URL@${{ secrets.WORKERS_MIRROR_URL }}@; }' -i.bak WORKSPACE
-          fi
-      - name: Enable slow tests if applicable
-        # Some tests (like Python import tests) take a long time to run and don't benefit much
-        # from multi-platform testing. For that reason, we only run them in a single configuration
-        # to minimize effect on CI pipeline runtime.
-        if: matrix.os.name == 'linux' && matrix.config.suffix == ''
-        shell: bash
-        run: |
-          cat <<EOF >> .bazelrc
-          build --build_tag_filters=-off-by-default
-          test --test_tag_filters=-off-by-default
-          EOF
-      - name: Generate list of excluded Bazel targets
-        # Exclude large benchmarking binaries created in debug and asan configurations to avoid
-        # running out of disk space on the runner (nominally 14GB). We typically have two copies
-        # of generated artifacts: one under bazel output-base and one in the bazel disk cache.
-        # Also only generate limited debug info – these binaries are only used for testing and
-        # don't need to run within a debugger, so information needed for symbolication is
-        # sufficient. The host configuration compiles in opt mode/without debug info by default, so
-        # there's no need to set host_copt here.
-        # LLVM produces a bit more debug info on macOS by default to facilitate debugging with
-        # LLDB. This is not needed for this use case, so disable it using -fno-standalone-debug –
-        # this is already the default for Linux/Windows.
-        if: contains(matrix.config.suffix, 'debug') || contains(matrix.config.suffix, 'asan')
-        shell: bash
-        run: |
-          cat <<EOF >> .bazelrc
-          build:limit-storage --build_tag_filters=-off-by-default,-slow,-benchmark
-          build:limit-storage --copt="-g1"
-          build:limit-storage --copt="-fno-standalone-debug"
-          build:limit-storage --config=rust-debug
-          build:asan --config=limit-storage
-          build:debug --config=limit-storage
-          EOF
-      - name: Fix macOS fastbuild configuration
-        # Unlike the bazel Unix toolchain the macOS toolchain sets "-O0 -DDEBUG" for fastbuild by
-        # default. This is unhelpful for compile speeds and test performance, remove the DEBUG
-        # define.
-        if: ${{ !(contains(matrix.config.suffix, 'debug') || contains(matrix.config.suffix, 'asan')) }}
-        shell: bash
-        run: |
-          cat <<EOF >> .bazelrc
-          build:macos --copt=-UDEBUG
-          EOF
-      - name: Configure git hooks
-        # Configure git to quell an irrelevant warning for runners (they never commit / push).
-        run: git config core.hooksPath githooks
-      - name: Bazel build
-        # Use a higher jobs level to effectively fetch from CPU and and use the remote cache at the
-        # same time, see https://github.com/bazelbuild/bazel/issues/6394. 32 is still a fairly
-        # small number here and should work for the small CI runners we use, if we switch to a
-        # bigger runner consider increasing this towards the suggested value of 200.
-        # Note the number of maximum build jobs is controlled by the --local_resources=cpu flag and
-        # still limited to the number of cores by default.
-        # timestamps are no longer being added here, the GitHub logs include timestamps (Use
-        # 'Show timestamps' on the web interface)
-        run: |
-          bazelisk build --remote_download_minimal ${{ matrix.config.bazel-args }} --jobs=32 --disk_cache=~/bazel-disk-cache --remote_cache=https://bazel:${{ secrets.BAZEL_CACHE_KEY }}@bazel-remote-cache.devprod.cloudflare.dev --verbose_failures --config=v8-codegen-opt //...
-      - name: Bazel test
-        run: |
-          bazelisk test --remote_download_minimal ${{ matrix.config.bazel-args }} --jobs=32 --disk_cache=~/bazel-disk-cache --remote_cache=https://bazel:${{ secrets.BAZEL_CACHE_KEY }}@bazel-remote-cache.devprod.cloudflare.dev --keep_going --verbose_failures --test_output=errors --config=v8-codegen-opt //...
-      - name: Report disk usage (in MB)
-        if: always()
-        shell: bash
-        run: |
-          BAZEL_OUTPUT_BASE=$(bazel info output_base)
-          BAZEL_REPOSITORY_CACHE=$(bazel info repository_cache)
-          echo "Bazel cache usage statistics"
-          du -ms -t 1 ~/bazel-disk-cache/* $BAZEL_REPOSITORY_CACHE
-          echo "Bazel output usage statistics"
-          du -ms -t 1 $BAZEL_OUTPUT_BASE
-          echo "Workspace usage statistics"
-          du -ms -t 1 $GITHUB_WORKSPACE
-      - name: Drop large Bazel cache files
-        if: always()
-        # Github has a nominal 10GB of storage for all cached builds associated with a project.
-        # Drop large files (>100MB) in our cache to improve shared build cache efficiency. This is
-        # particularly helpful for asan and debug builds that produce larger executables. Also
-        # the process of saving the Bazel disk cache generates a tarball on the runners disk, and
-        # it is possible to run out of storage in that process (does not fail the workflow).
-        shell: bash
-        run: |
-          if [ -d ~/bazel-disk-cache ]; then
-            find ~/bazel-disk-cache -size +100M -type f -exec rm {} \;
-            echo "Trimmed Bazel cache usage statistics"
-            du -ms -t 1 ~/bazel-disk-cache/*
-          else
-            echo "Disk cache does not exist: ~/bazel-disk-cache"
-          fi
-      - name: Bazel shutdown
-        # Check that there are no .bazelrc issues that prevent shutdown.
-        run: bazelisk shutdown
+          # Match workers-sdk node version
+          node-version: 18.20.5
+          cache: 'pnpm'
+      - name: Install workers-sdk dependencies
+        run: pnpm install
+
+      - name: Download workerd binary
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-arm-ARM64-binary
+          path: /tmp
+
+      - name: Make workerd binary executable
+        run: chmod +x /tmp/workerd
+
+      - name: Build Wrangler + Miniflare & dependencies
+        run: pnpm build --filter miniflare --filter wrangler
+
+      - name: Run Miniflare tests
+        run: pnpm test:ci --concurrency 1 --filter miniflare --filter wrangler
+        env:
+          MINIFLARE_WORKERD_PATH: /tmp/workerd

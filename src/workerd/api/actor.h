@@ -9,24 +9,25 @@
 // to expect something that looked more specifically like Erlang, whereas our actors are much more
 // abstractly related.
 
-#include <capnp/compat/byte-stream.h>
-#include <capnp/compat/http-over-capnp.h>
 #include <workerd/api/http.h>
 #include <workerd/api/worker-rpc.h>
-#include <workerd/jsg/jsg.h>
 #include <workerd/io/actor-id.h>
+#include <workerd/jsg/jsg.h>
+
+#include <capnp/compat/byte-stream.h>
+#include <capnp/compat/http-over-capnp.h>
 
 namespace workerd {
-  template <typename T> class IoOwn;
+template <typename T>
+class IoOwn;
 }
 
 namespace workerd::api {
 
 // A capability to an ephemeral Actor namespace.
 class ColoLocalActorNamespace: public jsg::Object {
-public:
-  ColoLocalActorNamespace(uint channel)
-    : channel(channel) {}
+ public:
+  ColoLocalActorNamespace(uint channel): channel(channel) {}
 
   jsg::Ref<Fetcher> get(kj::String actorId);
 
@@ -34,7 +35,7 @@ public:
     JSG_METHOD(get);
   }
 
-private:
+ private:
   uint channel;
 };
 
@@ -42,10 +43,12 @@ class DurableObjectNamespace;
 
 // DurableObjectId type seen by JavaScript.
 class DurableObjectId: public jsg::Object {
-public:
+ public:
   DurableObjectId(kj::Own<ActorIdFactory::ActorId> id): id(kj::mv(id)) {}
 
-  const ActorIdFactory::ActorId& getInner() { return *id; }
+  const ActorIdFactory::ActorId& getInner() {
+    return *id;
+  }
 
   // ---------------------------------------------------------------------------
   // JS API
@@ -53,10 +56,14 @@ public:
   // Converts to a string which can be passed back to the constructor to reproduce the same ID.
   kj::String toString();
 
-  inline bool equals(DurableObjectId& other) { return id->equals(*other.id); }
+  inline bool equals(DurableObjectId& other) {
+    return id->equals(*other.id);
+  }
 
   // Get the name, if known.
-  inline jsg::Optional<kj::StringPtr> getName() { return id->getName(); }
+  inline jsg::Optional<kj::StringPtr> getName() {
+    return id->getName();
+  }
 
   JSG_RESOURCE_TYPE(DurableObjectId) {
     JSG_METHOD(toString);
@@ -68,7 +75,7 @@ public:
     tracker.trackFieldWithSize("id", sizeof(ActorIdFactory::ActorId));
   }
 
-private:
+ private:
   kj::Own<ActorIdFactory::ActorId> id;
 
   friend class DurableObjectNamespace;
@@ -77,14 +84,19 @@ private:
 // Stub object used to send messages to a remote durable object.
 class DurableObject final: public Fetcher {
 
-public:
-  DurableObject(jsg::Ref<DurableObjectId> id, IoOwn<OutgoingFactory> outgoingFactory,
-                RequiresHostAndProtocol requiresHost)
-    : Fetcher(kj::mv(outgoingFactory), requiresHost, true /* isInHouse */),
-      id(kj::mv(id)) {}
+ public:
+  DurableObject(jsg::Ref<DurableObjectId> id,
+      IoOwn<OutgoingFactory> outgoingFactory,
+      RequiresHostAndProtocol requiresHost)
+      : Fetcher(kj::mv(outgoingFactory), requiresHost, true /* isInHouse */),
+        id(kj::mv(id)) {}
 
-  jsg::Ref<DurableObjectId> getId() { return id.addRef(); };
-  jsg::Optional<kj::StringPtr> getName() { return id->getName(); }
+  jsg::Ref<DurableObjectId> getId() {
+    return id.addRef();
+  };
+  jsg::Optional<kj::StringPtr> getName() {
+    return id->getName();
+  }
 
   JSG_RESOURCE_TYPE(DurableObject) {
     JSG_INHERIT(Fetcher);
@@ -94,7 +106,7 @@ public:
 
     JSG_TS_DEFINE(interface DurableObject {
       fetch(request: Request): Response | Promise<Response>;
-      alarm?(): void | Promise<void>;
+      alarm?(alarmInfo?: AlarmInvocationInfo): void | Promise<void>;
       webSocketMessage?(ws: WebSocket, message: string | ArrayBuffer): void | Promise<void>;
       webSocketClose?(ws: WebSocket, code: number, reason: string, wasClean: boolean): void | Promise<void>;
       webSocketError?(ws: WebSocket, error: unknown): void | Promise<void>;
@@ -115,7 +127,7 @@ public:
     tracker.trackField("id", id);
   }
 
-private:
+ private:
   jsg::Ref<DurableObjectId> id;
 
   void visitForGc(jsg::GcVisitor& visitor) {
@@ -123,15 +135,34 @@ private:
   }
 };
 
+// Like `GlobalActorOutgoingFactory` in the source file, but only used for creating a stub to
+// primary DO so the stub can be given to a replica.
+//
+// The main distinction here is we already have the capability to the primary, so we don't need to
+// make an outgoing request to set things up.
+class ReplicaActorOutgoingFactory final: public Fetcher::OutgoingFactory {
+ public:
+  ReplicaActorOutgoingFactory(kj::Own<IoChannelFactory::ActorChannel> channel, kj::String actorId)
+      : actorChannel(kj::mv(channel)),
+        actorId(kj::mv(actorId)) {}
+
+  kj::Own<WorkerInterface> newSingleUseClient(kj::Maybe<kj::String> cfStr) override;
+
+ private:
+  kj::Own<IoChannelFactory::ActorChannel> actorChannel;
+  kj::String actorId;
+};
+
 // Global durable object class binding type.
 class DurableObjectNamespace: public jsg::Object {
 
-public:
+ public:
   DurableObjectNamespace(uint channel, kj::Own<ActorIdFactory> idFactory)
-    : channel(channel), idFactory(kj::mv(idFactory)) {}
+      : channel(channel),
+        idFactory(kj::mv(idFactory)) {}
 
   struct NewUniqueIdOptions {
-      // Restricts the new unique ID to a set of colos within a jurisdiction.
+    // Restricts the new unique ID to a set of colos within a jurisdiction.
     jsg::Optional<kj::String> jurisdiction;
 
     JSG_STRUCT(jurisdiction);
@@ -171,16 +202,12 @@ public:
 
   // Gets a durable object by ID or creates it if it doesn't already exist.
   jsg::Ref<DurableObject> get(
-      jsg::Lock& js,
-      jsg::Ref<DurableObjectId> id,
-      jsg::Optional<GetDurableObjectOptions> options);
+      jsg::Lock& js, jsg::Ref<DurableObjectId> id, jsg::Optional<GetDurableObjectOptions> options);
 
   // Experimental. Gets a durable object by ID if it already exists. Currently, gated for use
   // by cloudflare only.
   jsg::Ref<DurableObject> getExisting(
-      jsg::Lock& js,
-      jsg::Ref<DurableObjectId> id,
-      jsg::Optional<GetDurableObjectOptions> options);
+      jsg::Lock& js, jsg::Ref<DurableObjectId> id, jsg::Optional<GetDurableObjectOptions> options);
 
   // Creates a subnamespace with the jurisdiction hardcoded.
   jsg::Ref<DurableObjectNamespace> jurisdiction(kj::String jurisdiction);
@@ -210,23 +237,19 @@ public:
     }
   }
 
-private:
+ private:
   uint channel;
   kj::Own<ActorIdFactory> idFactory;
 
-  jsg::Ref<DurableObject> getImpl(
-      jsg::Lock& js,
+  jsg::Ref<DurableObject> getImpl(jsg::Lock& js,
       ActorGetMode mode,
       jsg::Ref<DurableObjectId> id,
       jsg::Optional<GetDurableObjectOptions> options);
 };
 
-#define EW_ACTOR_ISOLATE_TYPES                      \
-  api::ColoLocalActorNamespace,                     \
-  api::DurableObject,                               \
-  api::DurableObjectId,                             \
-  api::DurableObjectNamespace,                      \
-  api::DurableObjectNamespace::NewUniqueIdOptions,  \
-  api::DurableObjectNamespace::GetDurableObjectOptions
+#define EW_ACTOR_ISOLATE_TYPES                                                                     \
+  api::ColoLocalActorNamespace, api::DurableObject, api::DurableObjectId,                          \
+      api::DurableObjectNamespace, api::DurableObjectNamespace::NewUniqueIdOptions,                \
+      api::DurableObjectNamespace::GetDurableObjectOptions
 
 }  // namespace workerd::api

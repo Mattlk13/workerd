@@ -1,13 +1,18 @@
-from asyncio import Future, ensure_future, Queue, sleep
-from inspect import isawaitable
+from asyncio import Future, Queue, ensure_future, sleep
 from contextlib import contextmanager
-from fastapi import Request, Depends
+from inspect import isawaitable
 
 ASGI = {"spec_version": "2.0", "version": "3.0"}
 
-@Depends
-async def env(request: Request):
-    return request.scope["env"]
+
+background_tasks = set()
+
+
+def run_in_background(coro):
+    fut = ensure_future(coro)
+    background_tasks.add(fut)
+    fut.add_done_callback(background_tasks.discard)
+
 
 @contextmanager
 def acquire_js_buffer(pybuffer):
@@ -25,7 +30,11 @@ def acquire_js_buffer(pybuffer):
 def request_to_scope(req, env, ws=False):
     from js import URL
 
-    headers = [tuple(x) for x in req.headers]
+    # @app.get("/example")
+    # async def example(request: Request):
+    #     request.headers.get("content-type")
+    # - this will error if header is not "bytes" as in ASGI spec.
+    headers = [(k.lower().encode(), v.encode()) for k, v in req.headers]
     url = URL.new(req.url)
     assert url.protocol[-1] == ":"
     scheme = url.protocol[:-1]
@@ -45,15 +54,17 @@ def request_to_scope(req, env, ws=False):
         "path": path,
         "query_string": query_string,
         "type": ty,
-        "env": env
+        "env": env,
     }
 
 
 async def start_application(app):
     shutdown_future = Future()
+
     async def shutdown():
         shutdown_future.set_result(None)
         await sleep(0)
+
     it = iter([{"type": "lifespan.startup"}, Future()])
 
     async def receive():
@@ -65,15 +76,14 @@ async def start_application(app):
     ready = Future()
 
     async def send(got):
-        if got['type'] == 'lifespan.startup.complete':
-            print("Application startup complete.")
-            print("Uvicorn running")
+        if got["type"] == "lifespan.startup.complete":
             ready.set_result(None)
-        if got['type'] == 'lifespan.shutdown.complete':
-            print("Application shutdown complete")
+            return
+        if got["type"] == "lifespan.shutdown.complete":
+            return
         raise RuntimeError(f"Unexpected lifespan event {got['type']}")
 
-    ensure_future(
+    run_in_background(
         app(
             {
                 "asgi": ASGI,
@@ -89,7 +99,8 @@ async def start_application(app):
 
 
 async def process_request(app, req, env):
-    from js import Response, Object
+    from js import Object, Response
+
     from pyodide.ffi import create_proxy
 
     status = None
@@ -97,8 +108,13 @@ async def process_request(app, req, env):
     result = Future()
 
     async def response_gen():
-        async for data in req.body:
-            yield {"body": data.to_bytes(), "more_body": True, "type": "http.request"}
+        if req.body:
+            async for data in req.body:
+                yield {
+                    "body": data.to_bytes(),
+                    "more_body": True,
+                    "type": "http.request",
+                }
         yield {"body": b"", "more_body": False, "type": "http.request"}
 
     responses = response_gen()
@@ -111,7 +127,8 @@ async def process_request(app, req, env):
         nonlocal headers
         if got["type"] == "http.response.start":
             status = got["status"]
-            headers = got["headers"]
+            # Like above, we need to convert byte-pairs into string explicitly.
+            headers = [(k.decode(), v.decode()) for k, v in got["headers"]]
         if got["type"] == "http.response.body":
             # intentionally leak body to avoid a copy
             #
@@ -178,7 +195,7 @@ async def process_websocket(app, req):
         return received
 
     env = {}
-    ensure_future(app(request_to_scope(req, env, ws=True), ws_receive, ws_send))
+    run_in_background(app(request_to_scope(req, env, ws=True), ws_receive, ws_send))
 
     return Response.new(None, status=101, webSocket=client)
 
@@ -192,3 +209,16 @@ async def fetch(app, req, env):
 
 async def websocket(app, req):
     return await process_websocket(app, req)
+
+
+def __getattr__(name):
+    if name == "env":
+        from fastapi import Depends, Request
+
+        @Depends
+        async def env(request: Request):
+            return request.scope["env"]
+
+        return env
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

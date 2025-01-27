@@ -6,14 +6,16 @@
 
 #include "gpu-async-runner.h"
 #include "gpu-utils.h"
-#include <webgpu/webgpu_cpp.h>
+
 #include <workerd/jsg/jsg.h>
+
+#include <webgpu/webgpu_cpp.h>
 
 namespace workerd::api::gpu {
 
-class GPUCompilationMessage : public jsg::Object {
-public:
-  explicit GPUCompilationMessage(const WGPUCompilationMessage& m) : message(m) {}
+class GPUCompilationMessage: public jsg::Object {
+ public:
+  explicit GPUCompilationMessage(const WGPUCompilationMessage& m): message(m) {}
 
   JSG_RESOURCE_TYPE(GPUCompilationMessage) {
     JSG_READONLY_PROTOTYPE_PROPERTY(message, getMessage);
@@ -24,7 +26,7 @@ public:
     JSG_READONLY_PROTOTYPE_PROPERTY(length, getLength);
   }
 
-private:
+ private:
   WGPUCompilationMessage message;
 
   kj::StringPtr getMessage() {
@@ -32,14 +34,14 @@ private:
   }
   GPUCompilationMessageType getType() {
     switch (message.type) {
-    case WGPUCompilationMessageType_Error:
-      return kj::str("error");
-    case WGPUCompilationMessageType_Warning:
-      return kj::str("warning");
-    case WGPUCompilationMessageType_Info:
-      return kj::str("info");
-    default:
-      KJ_UNREACHABLE
+      case WGPUCompilationMessageType_Error:
+        return kj::str("error");
+      case WGPUCompilationMessageType_Warning:
+        return kj::str("warning");
+      case WGPUCompilationMessageType_Info:
+        return kj::str("info");
+      default:
+        KJ_UNREACHABLE
     }
   }
   double getLineNum() {
@@ -56,21 +58,21 @@ private:
   }
 };
 
-class GPUCompilationInfo : public jsg::Object {
-public:
+class GPUCompilationInfo: public jsg::Object {
+ public:
   explicit GPUCompilationInfo(kj::Vector<jsg::Ref<GPUCompilationMessage>> messages)
-      : messages_(kj::mv(messages)){};
+      : messages_(kj::mv(messages)) {};
   JSG_RESOURCE_TYPE(GPUCompilationInfo) {
     JSG_READONLY_PROTOTYPE_PROPERTY(messages, getMessages);
   }
 
   void visitForMemoryInfo(jsg::MemoryTracker& tracker) const {
-    for (const auto& message : messages_) {
+    for (const auto& message: messages_) {
       tracker.trackField(nullptr, message);
     }
   }
 
-private:
+ private:
   kj::Vector<jsg::Ref<GPUCompilationMessage>> messages_;
   kj::ArrayPtr<jsg::Ref<GPUCompilationMessage>> getMessages() {
     return messages_.asPtr();
@@ -80,19 +82,20 @@ private:
   }
 };
 
-class GPUShaderModule : public jsg::Object {
-public:
+class GPUShaderModule: public jsg::Object {
+ public:
   // Implicit cast operator to Dawn GPU object
   inline operator const wgpu::ShaderModule&() const {
     return shader_;
   }
   explicit GPUShaderModule(wgpu::ShaderModule s, kj::Own<AsyncRunner> async)
-      : shader_(kj::mv(s)), async_(kj::mv(async)){};
+      : shader_(kj::mv(s)),
+        async_(kj::mv(async)) {};
   JSG_RESOURCE_TYPE(GPUShaderModule) {
     JSG_METHOD(getCompilationInfo);
   }
 
-private:
+ private:
   wgpu::ShaderModule shader_;
   kj::Own<AsyncRunner> async_;
   jsg::Promise<jsg::Ref<GPUCompilationInfo>> getCompilationInfo(jsg::Lock& js);
@@ -113,4 +116,4 @@ struct GPUProgrammableStage {
   JSG_STRUCT(module, entryPoint, constants);
 };
 
-} // namespace workerd::api::gpu
+}  // namespace workerd::api::gpu

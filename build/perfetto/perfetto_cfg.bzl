@@ -43,7 +43,8 @@ PERFETTO_CONFIG = struct(
         # Target exposing platform-specific functionality for base. This is
         # overridden in Google internal builds.
         base_platform = ["//:perfetto_base_default_platform"],
-        zlib = ["@perfetto_dep_zlib//:zlib"],
+        zlib = ["@zlib//:zlib"],
+        expat = ["@perfetto_dep_expat//:expat"],
         jsoncpp = ["@perfetto_dep_jsoncpp//:jsoncpp"],
         linenoise = ["@perfetto_dep_linenoise//:linenoise"],
         sqlite = ["@perfetto_dep_sqlite//:sqlite"],
@@ -74,6 +75,9 @@ PERFETTO_CONFIG = struct(
         #     your own demangling implementation.
         demangle_wrapper = ["//:src_trace_processor_demangle"],
         llvm_demangle = ["@perfetto_dep_llvm_demangle//:llvm_demangle"],
+
+        # no open csd support needed
+        open_csd = [],
     ),
 
     # This struct allows embedders to customize the cc_opts for Perfetto

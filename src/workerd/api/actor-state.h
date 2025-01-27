@@ -7,16 +7,22 @@
 //
 // See actor.h for APIs used by other Workers to talk to Actors.
 
-#include <workerd/jsg/jsg.h>
-#include <workerd/io/io-context.h>
-#include <workerd/io/actor-storage.capnp.h>
-#include <kj/async.h>
+#include <workerd/api/actor.h>
+#include <workerd/api/container.h>
 #include <workerd/io/actor-cache.h>
+#include <workerd/io/actor-id.h>
+#include <workerd/io/compatibility-date.capnp.h>
+#include <workerd/io/io-own.h>
+#include <workerd/io/worker.h>
+#include <workerd/jsg/jsg.h>
+
+#include <kj/async.h>
 
 namespace workerd::api {
 class SqlStorage;
 
 // Forward-declared to avoid dependency cycle (actor.h -> http.h -> basics.h -> actor-state.h)
+class DurableObject;
 class DurableObjectId;
 class WebSocket;
 
@@ -28,23 +34,20 @@ jsg::JsValue deserializeV8Value(
 // Common implementation of DurableObjectStorage and DurableObjectTransaction. This class is
 // designed to be used as a mixin.
 class DurableObjectStorageOperations {
-public:
+ public:
   struct GetOptions {
     jsg::Optional<bool> allowConcurrency;
     jsg::Optional<bool> noCache;
 
     inline operator ActorCacheOps::ReadOptions() const {
-      return {
-        .noCache = noCache.orDefault(false)
-      };
+      return {.noCache = noCache.orDefault(false)};
     }
 
     JSG_STRUCT(allowConcurrency, noCache);
-    JSG_STRUCT_TS_OVERRIDE(DurableObjectGetOptions); // Rename from DurableObjectStorageOperationsGetOptions
+    JSG_STRUCT_TS_OVERRIDE(DurableObjectGetOptions);  // Rename from DurableObjectStorageOperationsGetOptions
   };
 
-  jsg::Promise<jsg::JsRef<jsg::JsValue>> get(
-      jsg::Lock& js,
+  jsg::Promise<jsg::JsRef<jsg::JsValue>> get(jsg::Lock& js,
       kj::OneOf<kj::String, kj::Array<kj::String>> keys,
       jsg::Optional<GetOptions> options);
 
@@ -52,7 +55,7 @@ public:
     jsg::Optional<bool> allowConcurrency;
 
     JSG_STRUCT(allowConcurrency);
-    JSG_STRUCT_TS_OVERRIDE(DurableObjectGetAlarmOptions); // Rename from DurableObjectStorageOperationsGetAlarmOptions
+    JSG_STRUCT_TS_OVERRIDE(DurableObjectGetAlarmOptions);  // Rename from DurableObjectStorageOperationsGetAlarmOptions
   };
 
   jsg::Promise<kj::Maybe<double>> getAlarm(jsg::Lock& js, jsg::Optional<GetAlarmOptions> options);
@@ -69,13 +72,11 @@ public:
     jsg::Optional<bool> noCache;
 
     inline operator ActorCacheOps::ReadOptions() const {
-      return {
-        .noCache = noCache.orDefault(false)
-      };
+      return {.noCache = noCache.orDefault(false)};
     }
 
     JSG_STRUCT(start, startAfter, end, prefix, reverse, limit, allowConcurrency, noCache);
-    JSG_STRUCT_TS_OVERRIDE(DurableObjectListOptions); // Rename from DurableObjectStorageOperationsListOptions
+    JSG_STRUCT_TS_OVERRIDE(DurableObjectListOptions);  // Rename from DurableObjectStorageOperationsListOptions
   };
 
   jsg::Promise<jsg::JsRef<jsg::JsValue>> list(jsg::Lock& js, jsg::Optional<ListOptions> options);
@@ -87,23 +88,20 @@ public:
 
     inline operator ActorCacheOps::WriteOptions() const {
       return {
-        .allowUnconfirmed = allowUnconfirmed.orDefault(false),
-        .noCache = noCache.orDefault(false)
-      };
+        .allowUnconfirmed = allowUnconfirmed.orDefault(false), .noCache = noCache.orDefault(false)};
     }
 
     JSG_STRUCT(allowConcurrency, allowUnconfirmed, noCache);
-    JSG_STRUCT_TS_OVERRIDE(DurableObjectPutOptions); // Rename from DurableObjectStorageOperationsPutOptions
+    JSG_STRUCT_TS_OVERRIDE(DurableObjectPutOptions);  // Rename from DurableObjectStorageOperationsPutOptions
   };
 
   jsg::Promise<void> put(jsg::Lock& js,
-                         kj::OneOf<kj::String, jsg::Dict<jsg::JsValue>> keyOrEntries,
-                         jsg::Optional<jsg::JsValue> value,
-                         jsg::Optional<PutOptions> options,
-                         const jsg::TypeHandler<PutOptions>& optionsTypeHandler);
+      kj::OneOf<kj::String, jsg::Dict<jsg::JsValue>> keyOrEntries,
+      jsg::Optional<jsg::JsValue> value,
+      jsg::Optional<PutOptions> options,
+      const jsg::TypeHandler<PutOptions>& optionsTypeHandler);
 
-  kj::OneOf<jsg::Promise<bool>, jsg::Promise<int>> delete_(
-      jsg::Lock& js,
+  kj::OneOf<jsg::Promise<bool>, jsg::Promise<int>> delete_(jsg::Lock& js,
       kj::OneOf<kj::String, kj::Array<kj::String>> keys,
       jsg::Optional<PutOptions> options);
 
@@ -119,15 +117,14 @@ public:
     }
 
     JSG_STRUCT(allowConcurrency, allowUnconfirmed);
-    JSG_STRUCT_TS_OVERRIDE(DurableObjectSetAlarmOptions); // Rename from DurableObjectStorageOperationsSetAlarmOptions
+    JSG_STRUCT_TS_OVERRIDE(DurableObjectSetAlarmOptions);  // Rename from DurableObjectStorageOperationsSetAlarmOptions
   };
 
-  jsg::Promise<void> setAlarm(jsg::Lock& js,
-                              kj::Date scheduledTime,
-                              jsg::Optional<SetAlarmOptions> options);
+  jsg::Promise<void> setAlarm(
+      jsg::Lock& js, kj::Date scheduledTime, jsg::Optional<SetAlarmOptions> options);
   jsg::Promise<void> deleteAlarm(jsg::Lock& js, jsg::Optional<SetAlarmOptions> options);
 
-protected:
+ protected:
   typedef kj::StringPtr OpName;
   static constexpr OpName OP_GET = "get()"_kj;
   static constexpr OpName OP_GET_ALARM = "getAlarm()"_kj;
@@ -159,35 +156,46 @@ protected:
     return kj::mv(options);
   }
 
-private:
-  jsg::Promise<jsg::JsRef<jsg::JsValue>> getOne(jsg::Lock& js,
-                                                kj::String key,
-                                                const GetOptions& options);
-  jsg::Promise<jsg::JsRef<jsg::JsValue>> getMultiple(jsg::Lock& js,
-                                                     kj::Array<kj::String> keys,
-                                                     const GetOptions& options);
+ private:
+  jsg::Promise<jsg::JsRef<jsg::JsValue>> getOne(
+      jsg::Lock& js, kj::String key, const GetOptions& options);
+  jsg::Promise<jsg::JsRef<jsg::JsValue>> getMultiple(
+      jsg::Lock& js, kj::Array<kj::String> keys, const GetOptions& options);
 
-  jsg::Promise<void> putOne(jsg::Lock& js,
-                            kj::String key,
-                            jsg::JsValue value,
-                            const PutOptions& options);
-  jsg::Promise<void> putMultiple(jsg::Lock& js, jsg::Dict<jsg::JsValue> entries,
-                                 const PutOptions& options);
+  jsg::Promise<void> putOne(
+      jsg::Lock& js, kj::String key, jsg::JsValue value, const PutOptions& options);
+  jsg::Promise<void> putMultiple(
+      jsg::Lock& js, jsg::Dict<jsg::JsValue> entries, const PutOptions& options);
 
   jsg::Promise<bool> deleteOne(jsg::Lock& js, kj::String key, const PutOptions& options);
-  jsg::Promise<int> deleteMultiple(jsg::Lock& js,
-                                   kj::Array<kj::String> keys,
-                                   const PutOptions& options);
+  jsg::Promise<int> deleteMultiple(
+      jsg::Lock& js, kj::Array<kj::String> keys, const PutOptions& options);
 };
 
 class DurableObjectTransaction;
 
 class DurableObjectStorage: public jsg::Object, public DurableObjectStorageOperations {
-public:
-  DurableObjectStorage(IoPtr<ActorCacheInterface> cache)
-    : cache(kj::mv(cache)) {}
+ public:
+  DurableObjectStorage(IoPtr<ActorCacheInterface> cache, bool enableSql)
+      : cache(kj::mv(cache)),
+        enableSql(enableSql) {}
 
-  ActorCacheInterface& getActorCacheInterface() { return *cache; }
+  // This constructor is only used when we're setting up the `DurableObjectStorage` for a replica
+  // Durable Object instance. Replicas need to retain a reference to their primary so they can
+  // forward write requests, and since we already have a reference to the primary prior to
+  // constructing the `DurableObjectStorage`, we can just pass in the information we need to build
+  // a stub. The stub is then stored in `maybePrimary`.
+  DurableObjectStorage(IoPtr<ActorCacheInterface> cache,
+      bool enableSql,
+      kj::Own<IoChannelFactory::ActorChannel> primaryActorChannel,
+      kj::Own<ActorIdFactory::ActorId> primaryActorId);
+
+  ActorCacheInterface& getActorCacheInterface() {
+    return *cache;
+  }
+
+  // Throws if not SQLite-backed.
+  SqliteDatabase& getSqliteDb(jsg::Lock& js);
 
   struct TransactionOptions {
     jsg::Optional<kj::Date> asOfTime;
@@ -198,15 +206,13 @@ public:
     // Omit from definitions
   };
 
-  jsg::Promise<jsg::JsRef<jsg::JsValue>> transaction(
-      jsg::Lock& js,
-      jsg::Function<jsg::Promise<jsg::JsRef<jsg::JsValue>>(
-          jsg::Ref<DurableObjectTransaction>)> closure,
+  jsg::Promise<jsg::JsRef<jsg::JsValue>> transaction(jsg::Lock& js,
+      jsg::Function<jsg::Promise<jsg::JsRef<jsg::JsValue>>(jsg::Ref<DurableObjectTransaction>)>
+          closure,
       jsg::Optional<TransactionOptions> options);
 
   jsg::JsRef<jsg::JsValue> transactionSync(
-      jsg::Lock& js,
-      jsg::Function<jsg::JsRef<jsg::JsValue>()> callback);
+      jsg::Lock& js, jsg::Function<jsg::JsRef<jsg::JsValue>()> callback);
 
   jsg::Promise<void> deleteAll(jsg::Lock& js, jsg::Optional<PutOptions> options);
 
@@ -234,6 +240,22 @@ public:
   // by calling state.abort() or by throwing from a blockConcurrencyWhile() callback.
   kj::Promise<kj::String> onNextSessionRestoreBookmark(kj::String bookmark);
 
+  // Wait until the database has been updated to the state represented by `bookmark`.
+  //
+  // `waitForBookmark` is useful synchronizing requests across replicas of the same database.  On
+  // primary databases, `waitForBookmark` will resolve immediately.  On replica databases,
+  // `waitForBookmark` will resolve when the replica has been updated to a point at or after
+  // `bookmark`.
+  kj::Promise<void> waitForBookmark(kj::String bookmark);
+
+  // Arrange to create replicas for this Durable Object.
+  //
+  // Once a Durable Object instance calls `ensureReplicas`, all subsequent calls will be no-ops,
+  // thus it is idempotent.
+  void ensureReplicas();
+
+  jsg::Optional<jsg::Ref<DurableObject>> getPrimary(jsg::Lock& js);
+
   JSG_RESOURCE_TYPE(DurableObjectStorage, CompatibilityFlags::Reader flags) {
     JSG_METHOD(get);
     JSG_METHOD(list);
@@ -246,13 +268,20 @@ public:
     JSG_METHOD(deleteAlarm);
     JSG_METHOD(sync);
 
-    if (flags.getWorkerdExperimental()) {
-      JSG_LAZY_INSTANCE_PROPERTY(sql, getSql);
-      JSG_METHOD(transactionSync);
+    JSG_LAZY_INSTANCE_PROPERTY(sql, getSql);
+    JSG_METHOD(transactionSync);
 
-      JSG_METHOD(getCurrentBookmark);
-      JSG_METHOD(getBookmarkForTime);
-      JSG_METHOD(onNextSessionRestoreBookmark);
+    JSG_METHOD(getCurrentBookmark);
+    JSG_METHOD(getBookmarkForTime);
+    JSG_METHOD(onNextSessionRestoreBookmark);
+
+    if (flags.getWorkerdExperimental()) {
+      JSG_METHOD(waitForBookmark);
+      JSG_READONLY_INSTANCE_PROPERTY(primary, getPrimary);
+    }
+
+    if (flags.getReplicaRouting()) {
+      JSG_METHOD(ensureReplicas);
     }
 
     JSG_TS_OVERRIDE({
@@ -272,22 +301,26 @@ public:
     });
   }
 
-protected:
+ protected:
   ActorCacheOps& getCache(kj::StringPtr op) override;
 
   bool useDirectIo() override {
     return false;
   }
 
-private:
+ private:
   IoPtr<ActorCacheInterface> cache;
+  bool enableSql;
   uint transactionSyncDepth = 0;
+
+  // Set if this is a replica Durable Object.
+  kj::Maybe<jsg::Ref<DurableObject>> maybePrimary;
 };
 
 class DurableObjectTransaction final: public jsg::Object, public DurableObjectStorageOperations {
-public:
+ public:
   DurableObjectTransaction(IoOwn<ActorCacheInterface::Transaction> cacheTxn)
-    : cacheTxn(kj::mv(cacheTxn)) {}
+      : cacheTxn(kj::mv(cacheTxn)) {}
 
   // Called from C++, not JS, after the transaction callback has completed (successfully or not).
   // These methods do nothing if the transaction is already committed / rolled back.
@@ -329,14 +362,14 @@ public:
     });
   }
 
-protected:
+ protected:
   ActorCacheOps& getCache(kj::StringPtr op) override;
 
   bool useDirectIo() override {
     return false;
   }
 
-private:
+ private:
   // Becomes null when committed or rolled back.
   kj::Maybe<IoOwn<ActorCacheInterface::Transaction>> cacheTxn;
 
@@ -350,10 +383,10 @@ private:
 // used for colo-local namespaces.
 class ActorState: public jsg::Object {
   // TODO(cleanup): Remove getPersistent method that isn't supported for colo-local actors anymore.
-public:
+ public:
   ActorState(Worker::Actor::Id actorId,
-             kj::Maybe<jsg::JsRef<jsg::JsValue>> transient,
-             kj::Maybe<jsg::Ref<DurableObjectStorage>> persistent);
+      kj::Maybe<jsg::JsRef<jsg::JsValue>> transient,
+      kj::Maybe<jsg::Ref<DurableObjectStorage>> persistent);
 
   kj::OneOf<jsg::Ref<DurableObjectId>, kj::StringPtr> getId();
 
@@ -388,23 +421,29 @@ public:
     tracker.trackField("persistent", persistent);
   }
 
-private:
+ private:
   Worker::Actor::Id id;
   kj::Maybe<jsg::JsRef<jsg::JsValue>> transient;
   kj::Maybe<jsg::Ref<DurableObjectStorage>> persistent;
 };
 
 class WebSocketRequestResponsePair: public jsg::Object {
-public:
+ public:
   WebSocketRequestResponsePair(kj::String request, kj::String response)
-      : request(kj::mv(request)), response(kj::mv(response)) {};
+      : request(kj::mv(request)),
+        response(kj::mv(response)) {};
 
-  static jsg::Ref<WebSocketRequestResponsePair> constructor(kj::String request, kj::String response) {
-    return jsg::alloc<WebSocketRequestResponsePair>(kj::mv(request),kj::mv(response));
+  static jsg::Ref<WebSocketRequestResponsePair> constructor(
+      kj::String request, kj::String response) {
+    return jsg::alloc<WebSocketRequestResponsePair>(kj::mv(request), kj::mv(response));
   };
 
-  kj::StringPtr getRequest() { return request.asPtr(); }
-  kj::StringPtr getResponse() { return response.asPtr(); }
+  kj::StringPtr getRequest() {
+    return request.asPtr();
+  }
+  kj::StringPtr getResponse() {
+    return response.asPtr();
+  }
 
   JSG_RESOURCE_TYPE(WebSocketRequestResponsePair) {
     JSG_READONLY_PROTOTYPE_PROPERTY(request, getRequest);
@@ -416,15 +455,17 @@ public:
     tracker.trackField("response", response);
   }
 
-private:
+ private:
   kj::String request;
   kj::String response;
 };
 
 // The type passed as the first parameter to durable object class's constructor.
 class DurableObjectState: public jsg::Object {
-public:
-  DurableObjectState(Worker::Actor::Id actorId, kj::Maybe<jsg::Ref<DurableObjectStorage>> storage);
+ public:
+  DurableObjectState(Worker::Actor::Id actorId,
+      kj::Maybe<jsg::Ref<DurableObjectStorage>> storage,
+      kj::Maybe<rpc::Container::Client> container);
 
   void waitUntil(kj::Promise<void> promise);
 
@@ -434,9 +475,12 @@ public:
     return storage.map([&](jsg::Ref<DurableObjectStorage>& p) { return p.addRef(); });
   }
 
+  jsg::Optional<jsg::Ref<Container>> getContainer() {
+    return container.map([](jsg::Ref<Container>& c) { return c.addRef(); });
+  }
+
   jsg::Promise<jsg::JsRef<jsg::JsValue>> blockConcurrencyWhile(
-      jsg::Lock& js,
-      jsg::Function<jsg::Promise<jsg::JsRef<jsg::JsValue>>()> callback);
+      jsg::Lock& js, jsg::Function<jsg::Promise<jsg::JsRef<jsg::JsValue>>()> callback);
 
   // Reset the object, including breaking the output gate and canceling any writes that haven't
   // been committed yet.
@@ -475,7 +519,8 @@ public:
   // reply to the request with the matching response, then store the timestamp at which
   // the request was received.
   // If maybeReqResp is not set, we consider it as unset and remove any set request response pair.
-  void setWebSocketAutoResponse(jsg::Optional<jsg::Ref<api::WebSocketRequestResponsePair>> maybeReqResp);
+  void setWebSocketAutoResponse(
+      jsg::Optional<jsg::Ref<api::WebSocketRequestResponsePair>> maybeReqResp);
 
   // Gets the currently set object-wide websocket auto response.
   kj::Maybe<jsg::Ref<api::WebSocketRequestResponsePair>> getWebSocketAutoResponse();
@@ -496,8 +541,9 @@ public:
 
   JSG_RESOURCE_TYPE(DurableObjectState, CompatibilityFlags::Reader flags) {
     JSG_METHOD(waitUntil);
-    JSG_READONLY_INSTANCE_PROPERTY(id, getId);
-    JSG_READONLY_INSTANCE_PROPERTY(storage, getStorage);
+    JSG_LAZY_INSTANCE_PROPERTY(id, getId);
+    JSG_LAZY_INSTANCE_PROPERTY(storage, getStorage);
+    JSG_LAZY_INSTANCE_PROPERTY(container, getContainer);
     JSG_METHOD(blockConcurrencyWhile);
     JSG_METHOD(acceptWebSocket);
     JSG_METHOD(getWebSockets);
@@ -508,12 +554,7 @@ public:
     JSG_METHOD(getHibernatableWebSocketEventTimeout);
     JSG_METHOD(getTags);
 
-    if (flags.getWorkerdExperimental()) {
-      // TODO(someday): This currently exists for testing purposes only but maybe it could be
-      //   useful to apps in actual production? It's a convenient way to bail out when you discover
-      //   your state is inconsistent.
-      JSG_METHOD(abort);
-    }
+    JSG_METHOD(abort);
 
     JSG_TS_ROOT();
     JSG_TS_OVERRIDE({
@@ -538,9 +579,10 @@ public:
     tracker.trackField("storage", storage);
   }
 
-private:
+ private:
   Worker::Actor::Id id;
   kj::Maybe<jsg::Ref<DurableObjectStorage>> storage;
+  kj::Maybe<jsg::Ref<Container>> container;
 
   // Limits for Hibernatable WebSocket tags.
 
@@ -548,17 +590,13 @@ private:
   const size_t MAX_TAG_LENGTH = 256;
 };
 
-#define EW_ACTOR_STATE_ISOLATE_TYPES                     \
-  api::ActorState,                                       \
-  api::DurableObjectState,                               \
-  api::DurableObjectTransaction,                         \
-  api::DurableObjectStorage,                             \
-  api::DurableObjectStorage::TransactionOptions,         \
-  api::DurableObjectStorageOperations::ListOptions,      \
-  api::DurableObjectStorageOperations::GetOptions,       \
-  api::DurableObjectStorageOperations::GetAlarmOptions,  \
-  api::DurableObjectStorageOperations::PutOptions,       \
-  api::DurableObjectStorageOperations::SetAlarmOptions,  \
-  api::WebSocketRequestResponsePair
+#define EW_ACTOR_STATE_ISOLATE_TYPES                                                               \
+  api::ActorState, api::DurableObjectState, api::DurableObjectTransaction,                         \
+      api::DurableObjectStorage, api::DurableObjectStorage::TransactionOptions,                    \
+      api::DurableObjectStorageOperations::ListOptions,                                            \
+      api::DurableObjectStorageOperations::GetOptions,                                             \
+      api::DurableObjectStorageOperations::GetAlarmOptions,                                        \
+      api::DurableObjectStorageOperations::PutOptions,                                             \
+      api::DurableObjectStorageOperations::SetAlarmOptions, api::WebSocketRequestResponsePair
 
 }  // namespace workerd::api

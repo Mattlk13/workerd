@@ -10,8 +10,11 @@ $Cxx.allowCancellation;
 
 struct ImpliedByAfterDate @0x8f8c1b68151b6cff {
   # Annotates a compatibility flag to indicate that it is implied by the enablement
-  # of the named flag after the specified date.
-  name @0 :Text;
+  # of the named flag(s) after the specified date.
+  union {
+    name @0 :Text;
+    names @2 :List(Text);
+  }
   date @1 :Text;
 }
 
@@ -36,6 +39,9 @@ struct PythonSnapshotRelease @0x89c66fb883cb6975 {
   # For example "2024-02-18".
   backport @3 :Int64;
   # A number that is incremented each time we need to backport a fix to an existing Python release.
+  baselineSnapshotHash @4 :Text;
+  # A sha256 checksum hash of the baseline/universal memory snapshot to use for Python Workers using
+  # this release.
 }
 
 
@@ -424,7 +430,9 @@ struct CompatibilityFlags @0x8f8c1b68151b6cef {
   pythonWorkers @43 :Bool
       $compatEnableFlag("python_workers")
       $pythonSnapshotRelease(pyodide = "0.26.0a2", pyodideRevision = "2024-03-01",
-          packages = "2024-03-01", backport = 0);
+          packages = "20240829.4", backport = 14,
+          baselineSnapshotHash = "d13ce2f4a0ade2e09047b469874dacf4d071ed3558fec4c26f8d0b99d95f77b5")
+      $impliedByAfterDate(name = "pythonWorkersDevPyodide", date = "2000-01-01");
   # Enables Python Workers. Access to this flag is not restricted, instead bundles containing
   # Python modules are restricted in EWC.
   #
@@ -485,15 +493,14 @@ struct CompatibilityFlags @0x8f8c1b68151b6cef {
   nodeJsCompatV2 @50 :Bool
       $compatEnableFlag("nodejs_compat_v2")
       $compatDisableFlag("no_nodejs_compat_v2")
-      $impliedByAfterDate(name = "nodeJsCompat", date = "2024-09-02");
+      $impliedByAfterDate(name = "nodeJsCompat", date = "2024-09-23");
   # Implies nodeJSCompat with the following additional modifications:
   # * Node.js Compat built-ins may be imported/required with or without the node: prefix
   # * Node.js Compat the globals Buffer and process are available everywhere
 
   globalFetchStrictlyPublic @51 :Bool
       $compatEnableFlag("global_fetch_strictly_public")
-      $compatDisableFlag("global_fetch_private_origin")
-      $experimental;
+      $compatDisableFlag("global_fetch_private_origin");
   # Controls what happens when a Worker hosted on Cloudflare uses the global `fetch()` function to
   # request a hostname that is within the Worker's own Cloudflare zone (domain).
   #
@@ -539,8 +546,8 @@ struct CompatibilityFlags @0x8f8c1b68151b6cef {
   cacheOptionEnabled @53 :Bool
     $compatEnableFlag("cache_option_enabled")
     $compatDisableFlag("cache_option_disabled")
-    $experimental;
-  # Enables the use of no-cache and no-store headers from requests
+    $compatEnableDate("2024-11-11");
+  # Enables the use of no-store headers from requests
 
   kvDirectBinding @54 :Bool
       $compatEnableFlag("kv_direct_binding")
@@ -565,10 +572,124 @@ struct CompatibilityFlags @0x8f8c1b68151b6cef {
 
   internalWritableStreamAbortClearsQueue @57 :Bool
       $compatEnableFlag("internal_writable_stream_abort_clears_queue")
-      $compatDisableFlag("internal_writable_stream_abort_does_not_clear_queue");
+      $compatDisableFlag("internal_writable_stream_abort_does_not_clear_queue")
+      $compatEnableDate("2024-09-02");
   # When using the original WritableStream implementation ("internal" streams), the
   # abort() operation would be handled lazily, meaning that the queue of pending writes
   # would not be cleared until the next time the queue was processed. This behavior leads
   # to a situtation where the stream can hang if the consumer stops consuming. When set,
   # this flag changes the behavior to clear the queue immediately upon abort.
+
+  pythonWorkersDevPyodide @58 :Bool
+    $compatEnableFlag("python_workers_development")
+    $pythonSnapshotRelease(pyodide = "dev", pyodideRevision = "dev",
+          packages = "20240829.4", backport = 0,
+          baselineSnapshotHash = "92859211804cd350f9e14010afad86e584bdd017dc7acfd94709a87f3220afae")
+    $experimental;
+  # Enables Python Workers and uses the bundle from the Pyodide source directory directly. For testing only.
+  #
+  # Note that the baseline snapshot hash here refers to the one used in
+  # `baseline-from-gcs.ew-test-bin.c++`. We don't intend to ever load it in production.
+
+  nodeJsZlib @59 :Bool
+      $compatEnableFlag("nodejs_zlib")
+      $compatDisableFlag("no_nodejs_zlib")
+      $impliedByAfterDate(names = ["nodeJsCompat", "nodeJsCompatV2"], date = "2024-09-23");
+  # Enables node:zlib implementation while it is in-development.
+  # Once the node:zlib implementation is complete, this will be automatically enabled when
+  # nodejs_compat or nodejs_compat_v2 are enabled.
+
+  replicaRouting @60 :Bool
+      $compatEnableFlag("replica_routing")
+      $experimental;
+  # Enables routing to a replica on the client-side.
+  # Doesn't mean requests *will* be routed to a replica, only that they can be.
+
+  enableD1WithSessionsAPI @61 :Bool
+      $compatEnableFlag("enable_d1_with_sessions_api")
+      $experimental;
+  # Enables the withSessions(commitTokenOrConstraint) method that allows users
+  # to use read-replication for D1.
+  # Experimental since this is not yet ready and is only meant for internal testing during development.
+
+  handleCrossRequestPromiseResolution @62 :Bool
+      $compatEnableFlag("handle_cross_request_promise_resolution")
+      $compatDisableFlag("no_handle_cross_request_promise_resolution")
+      $compatEnableDate("2024-10-14");
+  # Historically, it has been possible to resolve a promise from an incorrect request
+  # IoContext. This leads to issues with promise continuations being scheduled to run
+  # in the wrong IoContext leading to errors and difficult to diagnose bugs. With this
+  # compatibility flag we arrange to have such promise continuations scheduled to run
+  # in the correct IoContext if it is still alive, or dropped on the floor with a warning
+  # if the correct IoContext is not still alive.
+  obsolete63 @63 :Bool
+      $experimental;
+
+  setToStringTag @64 :Bool
+      $compatEnableFlag("set_tostring_tag")
+      $compatDisableFlag("do_not_set_tostring_tag")
+      $compatEnableDate("2024-09-26");
+  # A change was made that set the Symbol.toStringTag on all jsg::Objects in order to
+  # fix several spec compliance bugs. Unfortunately it turns out that was more breaking
+  # than expected. This flag restores the original behavior for compat dates before
+  # 2024-09-26
+
+  upperCaseAllHttpMethods @65 :Bool
+      $compatEnableFlag("upper_case_all_http_methods")
+      $compatDisableFlag("no_upper_case_all_http_methods")
+      $compatEnableDate("2024-10-14");
+  # HTTP methods are expected to be upper-cased. Per the fetch spec, if the methods
+  # is specified as `get`, `post`, `put`, `delete`, `head`, or `options`, implementations
+  # are expected to uppercase the method. All other method names would generally be
+  # expected to throw as unrecognized (e.g. `patch` would be an error while `PATCH` is
+  # accepted). This is a bit restrictive, even if it is in the spec. This flag modifies
+  # the behavior to uppercase all methods prior to parsing to that the method is always
+  # recognized if it is a known method.
+
+  pythonExternalPackages @66 :Bool
+      $compatEnableFlag("python_external_packages");
+  # Temporary flag to load Python packages from external bundle loaded at runtime.
+  #
+  # This is a compat flag so that we can opt in our test workers into it before rolling out to
+  # everyone.
+
+  noTopLevelAwaitInRequire @67 :Bool
+      $compatEnableFlag("disable_top_level_await_in_require")
+      $compatDisableFlag("enable_top_level_await_in_require")
+      $compatEnableDate("2024-12-02");
+  # When enabled, use of top-level await syntax in require() calls will be disallowed.
+  # The ecosystem and runtimes are moving to a state where top level await in modules
+  # is being strongly discouraged.
+
+  fixupTransformStreamBackpressure @68 :Bool
+      $compatEnableFlag("fixup-transform-stream-backpressure")
+      $compatDisableFlag("original-transform-stream-backpressure")
+      $compatEnableDate("2024-12-16");
+  # A bug in the original implementation of TransformStream failed to apply backpressure
+  # correctly. The fix, however, can break existing implementations that don't account
+  # for the bug so we need to put the fix behind a compat flag.
+
+  # Experimental support for exporting user spans to tail worker.
+  tailWorkerUserSpans @69 :Bool
+      $compatEnableFlag("tail_worker_user_spans")
+      $experimental;
+
+  cacheNoCache @70 :Bool
+      $compatEnableFlag("cache_no_cache_enabled")
+      $compatDisableFlag("cache_no_cache_disabled")
+      $experimental;
+  # Enables the use of cache: no-cache in the fetch api.
+
+  pythonWorkers20250116 @71 :Bool
+      $compatEnableFlag("python_workers_20250116")
+      $experimental
+      $pythonSnapshotRelease(pyodide = "0.27.1", pyodideRevision = "2025-01-16",
+          packages = "20241218", backport = 2,
+          baselineSnapshotHash = "TODO");
+
+  requestCfOverridesCacheRules @72 :Bool
+      $compatEnableFlag("request_cf_overrides_cache_rules")
+      $experimental
+      $neededByFl;
+  # Enables cache settings specified request in fetch api cf object to override cache rules. (only for user owned or grey-clouded sites)
 }

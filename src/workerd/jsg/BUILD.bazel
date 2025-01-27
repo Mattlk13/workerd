@@ -11,6 +11,8 @@ wd_cc_library(
     srcs = [
         "async-context.c++",
         "buffersource.c++",
+        "commonjs.c++",
+        "compile-cache.c++",
         "dom-exception.c++",
         "inspector.c++",
         "iterator.c++",
@@ -20,6 +22,7 @@ wd_cc_library(
         "modules-new.c++",
         "promise.c++",
         "resource.c++",
+        "script.c++",
         "ser.c++",
         "setup.c++",
         "util.c++",
@@ -29,6 +32,8 @@ wd_cc_library(
     hdrs = [
         "async-context.h",
         "buffersource.h",
+        "commonjs.h",
+        "compile-cache.h",
         "dom-exception.h",
         "function.h",
         "inspector.h",
@@ -42,6 +47,7 @@ wd_cc_library(
         "modules-new.h",
         "promise.h",
         "resource.h",
+        "script.h",
         "ser.h",
         "setup.h",
         "struct.h",
@@ -52,6 +58,8 @@ wd_cc_library(
         "web-idl.h",
         "wrappable.h",
     ],
+    # Some JSG headers can't be compiled on their own
+    features = ["-parse_headers"],
     visibility = ["//visibility:public"],
     deps = [
         ":exception",
@@ -64,6 +72,7 @@ wd_cc_library(
         "//src/workerd/util:thread-scopes",
         "//src/workerd/util:uuid",
         "@capnp-cpp//src/kj",
+        "@simdutf",
         "@workerd-v8//:v8",
     ],
 )
@@ -91,6 +100,7 @@ wd_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":memory-tracker",
+        "//src/workerd/util:strings",
         "@capnp-cpp//src/kj",
     ],
 )
@@ -175,6 +185,7 @@ wd_cc_library(
         "resource-test.c++",
         "rtti-test.c++",
         "url-test.c++",
+        "multiple-typewrappers-test.c++",
     ],
 )]
 
@@ -223,5 +234,13 @@ kj_test(
     deps = [
         ":jsg",
         ":resource_test_capnp",
+    ],
+)
+
+kj_test(
+    src = "multiple-typewrappers-test.c++",
+    deps = [
+        "//src/workerd/io",
+        "//src/workerd/jsg",
     ],
 )

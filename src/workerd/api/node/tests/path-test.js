@@ -22,16 +22,18 @@ import { default as path } from 'node:path';
 
 export const test_path = {
   test(ctrl, env, ctx) {
-
     // Test thrown TypeErrors
     const typeErrorTests = [true, false, 7, null, {}, undefined, [], NaN];
 
     function fail(fn) {
       const args = Array.from(arguments).slice(1);
 
-      throws(() => {
-        fn.apply(null, args);
-      }, { code: 'ERR_INVALID_ARG_TYPE', name: 'TypeError' });
+      throws(
+        () => {
+          fn.apply(null, args);
+        },
+        { code: 'ERR_INVALID_ARG_TYPE', name: 'TypeError' }
+      );
     }
 
     typeErrorTests.forEach((test) => {
@@ -67,7 +69,7 @@ export const test_path = {
     strictEqual(path.posix.delimiter, ':');
 
     strictEqual(path, path.posix);
-  }
+  },
 };
 
 export const test_path_zero_length_strings = {
@@ -95,9 +97,10 @@ export const test_path_zero_length_strings = {
     strictEqual(path.relative('', '/'), '');
     strictEqual(path.relative('/', ''), '');
     strictEqual(path.relative('/', '/'), '');
-  }
+  },
 };
 
+// Ref: https://github.com/nodejs/node/blob/4d6d7d644be4f10f90e5c9c66563736112fffbff/test/parallel/test-path-resolve.js
 export const test_path_resolve = {
   test(ctrl, env, ctx) {
     const failures = [];
@@ -112,17 +115,17 @@ export const test_path_resolve = {
       [['/foo/tmp.3/', '../tmp.3/cycles/root.js'], '/foo/tmp.3/cycles/root.js'],
     ];
     resolveTests.forEach(([test, expected]) => {
-        const actual = path.resolve.apply(null, test);
-        const message =
-          `path.posix.resolve(${test.map(JSON.stringify).join(',')})\n  expect=${
-            JSON.stringify(expected)}\n  actual=${JSON.stringify(actual)}`;
-        if (actual !== expected)
-          failures.push(message);
+      const actual = path.resolve.apply(null, test);
+      const message = `path.posix.resolve(${test.map(JSON.stringify).join(',')})\n  expect=${JSON.stringify(
+        expected
+      )}\n  actual=${JSON.stringify(actual)}`;
+      if (actual !== expected) failures.push(message);
     });
     strictEqual(failures.length, 0, failures.join('\n'));
-  }
-}
+  },
+};
 
+// Ref: https://github.com/nodejs/node/blob/4d6d7d644be4f10f90e5c9c66563736112fffbff/test/parallel/test-path-relative.js
 export const test_path_relative = {
   test(ctrl, env, ctx) {
     const failures = [];
@@ -146,14 +149,17 @@ export const test_path_relative = {
       const actual = path.relative(test[0], test[1]);
       const expected = test[2];
       if (actual !== expected) {
-        const message = `path.posix.relative(${
-          test.slice(0, 2).map(JSON.stringify).join(',')})\n  expect=${
-          JSON.stringify(expected)}\n  actual=${JSON.stringify(actual)}`;
+        const message = `path.posix.relative(${test
+          .slice(0, 2)
+          .map(JSON.stringify)
+          .join(',')})\n  expect=${JSON.stringify(
+          expected
+        )}\n  actual=${JSON.stringify(actual)}`;
         failures.push(`\n${message}`);
       }
     });
     strictEqual(failures.length, 0, failures.join(''));
-  }
+  },
 };
 
 export const test_path_parse_format = {
@@ -214,19 +220,21 @@ export const test_path_parse_format = {
       ['//', { root: '/', dir: '/', base: '', ext: '', name: '' }],
       ['///', { root: '/', dir: '/', base: '', ext: '', name: '' }],
       ['/foo///', { root: '/', dir: '/', base: 'foo', ext: '', name: 'foo' }],
-      ['/foo///bar.baz',
-       { root: '/', dir: '/foo//', base: 'bar.baz', ext: '.baz', name: 'bar' },
+      [
+        '/foo///bar.baz',
+        { root: '/', dir: '/foo//', base: 'bar.baz', ext: '.baz', name: 'bar' },
       ],
     ];
     const failures = [];
     trailingTests.forEach((test) => {
       const actual = path.parse(test[0]);
       const expected = test[1];
-      const message = `path.posix.parse(${JSON.stringify(test[0])})\n  expect=${
-        JSON.stringify(expected)}\n  actual=${JSON.stringify(actual)}`;
+      const message = `path.posix.parse(${JSON.stringify(test[0])})\n  expect=${JSON.stringify(
+        expected
+      )}\n  actual=${JSON.stringify(actual)}`;
       const actualKeys = Object.keys(actual);
       const expectedKeys = Object.keys(expected);
-      let failed = (actualKeys.length !== expectedKeys.length);
+      let failed = actualKeys.length !== expectedKeys.length;
       if (!failed) {
         for (let i = 0; i < actualKeys.length; ++i) {
           const key = actualKeys[i];
@@ -236,19 +244,21 @@ export const test_path_parse_format = {
           }
         }
       }
-      if (failed)
-        failures.push(`\n${message}`);
+      if (failed) failures.push(`\n${message}`);
     });
     strictEqual(failures.length, 0, failures.join(''));
 
     function checkErrors() {
       errors.forEach(({ method, input }) => {
-        throws(() => {
-          path[method].apply(path, input);
-        }, {
-          code: 'ERR_INVALID_ARG_TYPE',
-          name: 'TypeError'
-        });
+        throws(
+          () => {
+            path[method].apply(path, input);
+          },
+          {
+            code: 'ERR_INVALID_ARG_TYPE',
+            name: 'TypeError',
+          }
+        );
       });
     }
 
@@ -275,24 +285,79 @@ export const test_path_parse_format = {
       });
 
       [null, undefined, 1, true, false, 'string'].forEach((pathObject) => {
-        throws(() => {
-          path.format(pathObject);
-        }, {
-          code: 'ERR_INVALID_ARG_TYPE',
-          name: 'TypeError',
-        });
+        throws(
+          () => {
+            path.format(pathObject);
+          },
+          {
+            code: 'ERR_INVALID_ARG_TYPE',
+            name: 'TypeError',
+          }
+        );
       });
     }
 
     // See https://github.com/nodejs/node/issues/44343
     strictEqual(path.format({ name: 'x', ext: 'png' }), 'x.png');
     strictEqual(path.format({ name: 'x', ext: '.png' }), 'x.png');
-  }
+  },
 };
 
 export const test_path_normalize = {
   test(ctrl, env, ctx) {
-    strictEqual(path.posix.normalize('./fixtures///b/../b/c.js'), 'fixtures/b/c.js');
+    strictEqual(
+      path.win32.normalize('./fixtures///b/../b/c.js'),
+      'fixtures\\b\\c.js'
+    );
+    strictEqual(path.win32.normalize('/foo/../../../bar'), '\\bar');
+    strictEqual(path.win32.normalize('a//b//../b'), 'a\\b');
+    strictEqual(path.win32.normalize('a//b//./c'), 'a\\b\\c');
+    strictEqual(path.win32.normalize('a//b//.'), 'a\\b');
+    strictEqual(
+      path.win32.normalize('//server/share/dir/file.ext'),
+      '\\\\server\\share\\dir\\file.ext'
+    );
+    strictEqual(path.win32.normalize('/a/b/c/../../../x/y/z'), '\\x\\y\\z');
+    strictEqual(path.win32.normalize('C:'), 'C:.');
+    strictEqual(path.win32.normalize('C:..\\abc'), 'C:..\\abc');
+    strictEqual(
+      path.win32.normalize('C:..\\..\\abc\\..\\def'),
+      'C:..\\..\\def'
+    );
+    strictEqual(path.win32.normalize('C:\\.'), 'C:\\');
+    strictEqual(path.win32.normalize('file:stream'), 'file:stream');
+    strictEqual(path.win32.normalize('bar\\foo..\\..\\'), 'bar\\');
+    strictEqual(path.win32.normalize('bar\\foo..\\..'), 'bar');
+    strictEqual(path.win32.normalize('bar\\foo..\\..\\baz'), 'bar\\baz');
+    strictEqual(path.win32.normalize('bar\\foo..\\'), 'bar\\foo..\\');
+    strictEqual(path.win32.normalize('bar\\foo..'), 'bar\\foo..');
+    strictEqual(path.win32.normalize('..\\foo..\\..\\..\\bar'), '..\\..\\bar');
+    strictEqual(
+      path.win32.normalize('..\\...\\..\\.\\...\\..\\..\\bar'),
+      '..\\..\\bar'
+    );
+    strictEqual(
+      path.win32.normalize('../../../foo/../../../bar'),
+      '..\\..\\..\\..\\..\\bar'
+    );
+    strictEqual(
+      path.win32.normalize('../../../foo/../../../bar/../../'),
+      '..\\..\\..\\..\\..\\..\\'
+    );
+    strictEqual(
+      path.win32.normalize('../foobar/barfoo/foo/../../../bar/../../'),
+      '..\\..\\'
+    );
+    strictEqual(
+      path.win32.normalize('../.../../foobar/../../../bar/../../baz'),
+      '..\\..\\..\\..\\baz'
+    );
+    strictEqual(path.win32.normalize('foo/bar\\baz'), 'foo\\bar\\baz');
+
+    strictEqual(
+      path.posix.normalize('./fixtures///b/../b/c.js'),
+      'fixtures/b/c.js'
+    );
     strictEqual(path.posix.normalize('/foo/../../../bar'), '/bar');
     strictEqual(path.posix.normalize('a//b//../b'), 'a/b');
     strictEqual(path.posix.normalize('a//b//./c'), 'a/b/c');
@@ -305,18 +370,25 @@ export const test_path_normalize = {
     strictEqual(path.posix.normalize('bar/foo../'), 'bar/foo../');
     strictEqual(path.posix.normalize('bar/foo..'), 'bar/foo..');
     strictEqual(path.posix.normalize('../foo../../../bar'), '../../bar');
-    strictEqual(path.posix.normalize('../.../.././.../../../bar'),
-        '../../bar');
-    strictEqual(path.posix.normalize('../../../foo/../../../bar'),
-        '../../../../../bar');
-    strictEqual(path.posix.normalize('../../../foo/../../../bar/../../'),
-        '../../../../../../');
-    strictEqual(path.posix.normalize('../foobar/barfoo/foo/../../../bar/../../'),
-                '../../');
-    strictEqual(path.posix.normalize('../.../../foobar/../../../bar/../../baz'),
-                '../../../../baz');
+    strictEqual(path.posix.normalize('../.../.././.../../../bar'), '../../bar');
+    strictEqual(
+      path.posix.normalize('../../../foo/../../../bar'),
+      '../../../../../bar'
+    );
+    strictEqual(
+      path.posix.normalize('../../../foo/../../../bar/../../'),
+      '../../../../../../'
+    );
+    strictEqual(
+      path.posix.normalize('../foobar/barfoo/foo/../../../bar/../../'),
+      '../../'
+    );
+    strictEqual(
+      path.posix.normalize('../.../../foobar/../../../bar/../../baz'),
+      '../../../../baz'
+    );
     strictEqual(path.posix.normalize('foo/bar\\baz'), 'foo/bar\\baz');
-  }
+  },
 };
 
 export const test_path_join = {
@@ -379,13 +451,14 @@ export const test_path_join = {
       const expected = test[1];
       if (actual !== expected && actualAlt !== expected) {
         const delimiter = test[0].map(JSON.stringify).join(',');
-        const message = `path.posix.join(${delimiter})\n  expect=${
-          JSON.stringify(expected)}\n  actual=${JSON.stringify(actual)}`;
+        const message = `path.posix.join(${delimiter})\n  expect=${JSON.stringify(
+          expected
+        )}\n  actual=${JSON.stringify(actual)}`;
         failures.push(`\n${message}`);
       }
     });
     strictEqual(failures.length, 0, failures.join(''));
-  }
+  },
 };
 
 export const test_path_isabsolute = {
@@ -398,7 +471,7 @@ export const test_path_isabsolute = {
     strictEqual(path.isAbsolute('/home/foo/..'), true);
     strictEqual(path.isAbsolute('bar/'), false);
     strictEqual(path.isAbsolute('./baz'), false);
-  }
+  },
 };
 
 export const test_path_extname = {
@@ -452,10 +525,10 @@ export const test_path_extname = {
     ].forEach((test) => {
       const expected = test[1];
       const actual = path.extname(test[0]);
-      const message = `path.posix.extname(${JSON.stringify(test[0])})\n  expect=${
-        JSON.stringify(expected)}\n  actual=${JSON.stringify(actual)}`;
-      if (actual !== expected)
-        failures.push(`\n${message}`);
+      const message = `path.posix.extname(${JSON.stringify(test[0])})\n  expect=${JSON.stringify(
+        expected
+      )}\n  actual=${JSON.stringify(actual)}`;
+      if (actual !== expected) failures.push(`\n${message}`);
     });
 
     strictEqual(failures.length, 0, failures.join(''));
@@ -469,7 +542,7 @@ export const test_path_extname = {
     strictEqual(path.posix.extname('file\\\\'), '');
     strictEqual(path.posix.extname('file.\\'), '.\\');
     strictEqual(path.posix.extname('file.\\\\'), '.\\\\');
-  }
+  },
 };
 
 export const test_path_dirname = {
@@ -490,7 +563,7 @@ export const test_path_dirname = {
     strictEqual(path.dirname('////'), '/');
     strictEqual(path.dirname('//a'), '//');
     strictEqual(path.dirname('foo'), '.');
-  }
+  },
 };
 
 export const test_path_basename = {
@@ -526,8 +599,10 @@ export const test_path_basename = {
     strictEqual(path.basename('a', 'a'), '');
 
     // On unix a backslash is just treated as any other character.
-    strictEqual(path.posix.basename('\\dir\\basename.ext'),
-                       '\\dir\\basename.ext');
+    strictEqual(
+      path.posix.basename('\\dir\\basename.ext'),
+      '\\dir\\basename.ext'
+    );
     strictEqual(path.posix.basename('\\basename.ext'), '\\basename.ext');
     strictEqual(path.posix.basename('basename.ext'), 'basename.ext');
     strictEqual(path.posix.basename('basename.ext\\'), 'basename.ext\\');
@@ -537,7 +612,30 @@ export const test_path_basename = {
     // POSIX filenames may include control characters
     // c.f. http://www.dwheeler.com/essays/fixing-unix-linux-filenames.html
     const controlCharFilename = `Icon${String.fromCharCode(13)}`;
-    strictEqual(path.posix.basename(`/a/b/${controlCharFilename}`),
-                       controlCharFilename);
-  }
+    strictEqual(
+      path.posix.basename(`/a/b/${controlCharFilename}`),
+      controlCharFilename
+    );
+  },
+};
+
+export const make_sure_posix_win32_works = {
+  async test() {
+    {
+      const pathModule = await import('node:path/win32');
+      strictEqual(typeof pathModule.default.resolve, 'function');
+      strictEqual(
+        typeof process.getBuiltinModule('node:path/win32').resolve,
+        'function'
+      );
+    }
+    {
+      const pathModule = await import('node:path/posix');
+      strictEqual(typeof pathModule.default.resolve, 'function');
+      strictEqual(
+        typeof process.getBuiltinModule('node:path/posix').resolve,
+        'function'
+      );
+    }
+  },
 };

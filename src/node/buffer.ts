@@ -2,8 +2,6 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
-
 import {
   constants,
   kMaxLength,
@@ -13,10 +11,12 @@ import {
   isAscii,
   isUtf8,
   transcode,
+  INSPECT_MAX_BYTES,
+  resolveObjectURL,
 } from 'node-internal:internal_buffer';
 
-const atob = globalThis.atob;
-const btoa = globalThis.btoa;
+const atob = globalThis.atob.bind(globalThis);
+const btoa = globalThis.btoa.bind(globalThis);
 const Blob = globalThis.Blob;
 const File = globalThis.File;
 
@@ -33,6 +33,8 @@ export {
   isAscii,
   isUtf8,
   transcode,
+  INSPECT_MAX_BYTES,
+  resolveObjectURL,
 };
 
 export default {
@@ -48,4 +50,6 @@ export default {
   isAscii,
   isUtf8,
   transcode,
+  INSPECT_MAX_BYTES,
+  resolveObjectURL,
 };

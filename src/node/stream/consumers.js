@@ -23,15 +23,10 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-/* todo: the following is adopted code, enabling linting one day */
-/* eslint-disable */
 import { Buffer } from 'node-internal:internal_buffer';
 
 export async function blob(stream) {
-  const chunks = [];
-  for await (const chunk of stream)
-    chunks.push(chunk);
-  return new Blob(chunks);
+  return new Blob(await Array.fromAsync(stream));
 }
 
 export async function arrayBuffer(stream) {
@@ -47,10 +42,8 @@ export async function text(stream) {
   const dec = new TextDecoder();
   let str = '';
   for await (const chunk of stream) {
-    if (typeof chunk === 'string')
-      str += chunk;
-    else
-      str += dec.decode(chunk, { stream: true });
+    if (typeof chunk === 'string') str += chunk;
+    else str += dec.decode(chunk, { stream: true });
   }
   // Flush the streaming TextDecoder so that any pending
   // incomplete multibyte characters are handled.

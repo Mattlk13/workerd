@@ -2,8 +2,8 @@ load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("//:build/kj_test.bzl", "kj_test")
+load("//:build/wd_capnp_library.bzl", "wd_capnp_library")
 load("//:build/wd_cc_binary.bzl", "wd_cc_binary")
-load("//:build/wd_cc_capnp_library.bzl", "wd_cc_capnp_library")
 load("//:build/wd_cc_library.bzl", "wd_cc_library")
 
 config_setting(
@@ -45,20 +45,18 @@ wd_cc_binary(
     name = "workerd",
     srcs = ["workerd.c++"],
     malloc = ":malloc",
-    tags = ["no-arm64"],
     visibility = ["//visibility:public"],
     deps = [
         ":server",
+        ":v8-platform-impl",
         ":workerd-meta_capnp",
         ":workerd_capnp",
         "//src/pyodide:pyodide_extra_capnp",
+        "//src/rust/cxx-integration",
         "//src/workerd/util:autogate",
         "//src/workerd/util:perfetto",
         "@capnp-cpp//src/capnp:capnpc",
-    ] + select({
-        "@platforms//os:windows": [],
-        "//conditions:default": ["@workerd//src/workerd/util:symbolizer"],
-    }),
+    ],
 )
 
 wd_cc_library(
@@ -100,12 +98,10 @@ wd_cc_library(
     name = "server",
     srcs = [
         "server.c++",
-        "v8-platform-impl.c++",
         "workerd-api.c++",
     ],
     hdrs = [
         "server.h",
-        "v8-platform-impl.h",
         "workerd-api.h",
     ],
     defines = select({
@@ -117,53 +113,48 @@ wd_cc_library(
         ":actor-id-impl",
         ":alarm-scheduler",
         ":workerd_capnp",
+        "//deps/rust:runtime",
+        "//src/cloudflare",
+        "//src/node",
         "//src/workerd/api:html-rewriter",
+        "//src/workerd/api:hyperdrive",
+        "//src/workerd/api:memory-cache",
         "//src/workerd/api:pyodide",
+        "//src/workerd/api:r2",
         "//src/workerd/api:rtti",
+        "//src/workerd/api/node",
         "//src/workerd/io",
+        "//src/workerd/io:trace-stream",
         "//src/workerd/io:worker-entrypoint",
         "//src/workerd/jsg",
         "//src/workerd/util:perfetto",
         "@capnp-cpp//src/kj/compat:kj-tls",
-        "//src/workerd/api/node"
     ],
 )
 
-wd_cc_capnp_library(
-    name = "workerd_capnp",
-    srcs = ["workerd.capnp"],
-    visibility = ["//visibility:public"],
-    deps = [],
-)
-
-wd_cc_capnp_library(
-    name = "workerd-meta_capnp",
-    srcs = ["workerd-meta.capnp"],
-    visibility = ["//visibility:public"],
+wd_cc_library(
+    name = "v8-platform-impl",
+    srcs = [
+        "v8-platform-impl.c++",
+    ],
+    hdrs = [
+        "v8-platform-impl.h",
+    ],
     deps = [
-        ":workerd_capnp",
+        "//src/workerd/jsg",
+        "@capnp-cpp//src/kj",
     ],
 )
 
-sh_test(
-    name = "helloworld_compile_test",
-    size = "small",
-    srcs = ["tests/compile-tests/compile-test.sh"],
-    args = [
-        "$(location :workerd)",
-        "$(location //samples:helloworld/config.capnp)",
-        "$(location tests/compile-tests/compile-helloworld-test.ok)",
-    ],
-    data = [
-        "tests/compile-tests/compile-helloworld-test.ok",
-        ":workerd",
-        "//samples:helloworld/config.capnp",
-        "//samples:helloworld/worker.js",
-    ],
-    tags = ["no-qemu"],
+wd_capnp_library(src = "workerd.capnp")
+
+wd_capnp_library(
+    src = "workerd-meta.capnp",
+    deps = [":workerd_capnp"],
 )
 
 kj_test(
+    size = "large",
     src = "server-test.c++",
     deps = [
         ":server",
@@ -182,10 +173,8 @@ kj_test(
     ],
 )
 
-
 copy_file(
     name = "pyodide.capnp.bin@rule",
     src = "//src/pyodide:pyodide.capnp.bin@rule",
     out = "pyodide.capnp.bin",
 )
-

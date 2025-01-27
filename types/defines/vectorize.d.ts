@@ -59,13 +59,11 @@ type VectorizeDistanceMetric = "euclidean" | "cosine" | "dot-product";
  */
 type VectorizeMetadataRetrievalLevel = "all" | "indexed" | "none";
 
-interface VectorizeQueryOptions<
-  MetadataReturn extends boolean | VectorizeMetadataRetrievalLevel = boolean,
-> {
+interface VectorizeQueryOptions {
   topK?: number;
   namespace?: string;
   returnValues?: boolean;
-  returnMetadata?: MetadataReturn;
+  returnMetadata?: boolean | VectorizeMetadataRetrievalLevel;
   filter?: VectorizeVectorMetadataFilter;
 }
 
@@ -105,7 +103,7 @@ interface VectorizeIndexDetails {
  */
 interface VectorizeIndexInfo {
   /** The number of records containing vectors within the index. */
-  vectorsCount: number;
+  vectorCount: number;
   /** Number of dimensions the index has been configured for. */
   dimensions: number;
   /** ISO 8601 datetime of the last processed mutation on in the index. All changes before this mutation will be reflected in the index state. */
@@ -188,7 +186,7 @@ declare abstract class VectorizeIndex {
    */
   public query(
     vector: VectorFloatArray | number[],
-    options: VectorizeQueryOptions
+    options?: VectorizeQueryOptions
   ): Promise<VectorizeMatches>;
   /**
    * Insert a list of vectors into the index dataset. If a provided id exists, an error will be thrown.
@@ -235,7 +233,17 @@ declare abstract class Vectorize {
    */
   public query(
     vector: VectorFloatArray | number[],
-    options: VectorizeQueryOptions<VectorizeMetadataRetrievalLevel>
+    options?: VectorizeQueryOptions
+  ): Promise<VectorizeMatches>;
+  /**
+   * Use the provided vector-id to perform a similarity search across the index.
+   * @param vectorId Id for a vector in the index against which the index should be queried.
+   * @param options Configuration options to massage the returned data.
+   * @returns A promise that resolves with matched and scored vectors.
+   */
+  public queryById(
+    vectorId: string,
+    options?: VectorizeQueryOptions
   ): Promise<VectorizeMatches>;
   /**
    * Insert a list of vectors into the index dataset. If a provided id exists, an error will be thrown.

@@ -1,7 +1,4 @@
-import {
-  ok,
-  strictEqual,
-} from 'node:assert';
+import { ok, strictEqual } from 'node:assert';
 
 import {
   hasSubscribers,
@@ -12,18 +9,7 @@ import {
   Channel,
 } from 'node:diagnostics_channel';
 
-import {
-  AsyncLocalStorage,
-} from 'node:async_hooks';
-
-function deferredPromise() {
-  let resolve, reject;
-  const promise = new Promise((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export const test_basics = {
   async test(ctrl, env, ctx) {
@@ -33,7 +19,7 @@ export const test_basics = {
     strictEqual(channel1, channel2);
     ok(channel1 instanceof Channel);
 
-    const messagePromise = deferredPromise();
+    const messagePromise = Promise.withResolvers();
 
     const listener = (message) => {
       try {
@@ -55,7 +41,7 @@ export const test_basics = {
     ok(!hasSubscribers('foo'));
 
     await messagePromise.promise;
-  }
+  },
 };
 
 export const test_tracing = {
@@ -71,11 +57,11 @@ export const test_tracing = {
     tc.start.bindStore(als);
 
     const promises = [
-      deferredPromise(),
-      deferredPromise(),
-      deferredPromise(),
-      deferredPromise(),
-      deferredPromise(),
+      Promise.withResolvers(),
+      Promise.withResolvers(),
+      Promise.withResolvers(),
+      Promise.withResolvers(),
+      Promise.withResolvers(),
     ];
 
     const context = {};
@@ -104,15 +90,21 @@ export const test_tracing = {
           promises[1].reject(err);
         }
       },
-      asyncStart() { promises[2].resolve(); },
-      asyncEnd() { promises[3].resolve(); },
-      error() { promises[4].resolve(); },
+      asyncStart() {
+        promises[2].resolve();
+      },
+      asyncEnd() {
+        promises[3].resolve();
+      },
+      error() {
+        promises[4].resolve();
+      },
     });
 
     tc.tracePromise(async () => {
       throw new Error('boom');
     }, context);
 
-    await Promise.all(promises.map(p => p.promise));
-  }
+    await Promise.all(promises.map((p) => p.promise));
+  },
 };

@@ -3,22 +3,26 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 #include "server.h"
-#include <kj/test.h>
+
+#include <workerd/jsg/setup.h>
 #include <workerd/util/autogate.h>
 #include <workerd/util/capnp-mock.h>
-#include <workerd/jsg/setup.h>
+
 #include <kj/async-queue.h>
+#include <kj/test.h>
+
+#include <cstdlib>
 #include <regex>
-#include <stdlib.h>
 
 namespace workerd::server {
 namespace {
 
-#define KJ_FAIL_EXPECT_AT(location, ...) \
-  KJ_LOG_AT(ERROR, location, ##__VA_ARGS__);
-#define KJ_EXPECT_AT(cond, location, ...) \
-  if (auto _kjCondition = ::kj::_::MAGIC_ASSERT << cond); \
-  else KJ_FAIL_EXPECT_AT(location, "failed: expected " #cond, _kjCondition, ##__VA_ARGS__)
+#define KJ_FAIL_EXPECT_AT(location, ...) KJ_LOG_AT(ERROR, location, ##__VA_ARGS__);
+#define KJ_EXPECT_AT(cond, location, ...)                                                          \
+  if (auto _kjCondition = ::kj::_::MAGIC_ASSERT << cond)                                           \
+    ;                                                                                              \
+  else                                                                                             \
+    KJ_FAIL_EXPECT_AT(location, "failed: expected " #cond, _kjCondition, ##__VA_ARGS__)
 
 jsg::V8System v8System;
 // This can only be created once per process, so we have to put it at the top level.
@@ -32,9 +36,7 @@ const bool verboseLog = ([]() {
 kj::Own<config::Config::Reader> parseConfig(kj::StringPtr text, kj::SourceLocation loc) {
   capnp::MallocMessageBuilder builder;
   auto root = builder.initRoot<config::Config>();
-  KJ_IF_SOME(exception, kj::runCatchingExceptions([&]() {
-    TEXT_CODEC.decode(text, root);
-  })) {
+  KJ_IF_SOME(exception, kj::runCatchingExceptions([&]() { TEXT_CODEC.decode(text, root); })) {
     KJ_FAIL_REQUIRE_AT(loc, exception);
   }
 
@@ -49,7 +51,7 @@ kj::Own<config::Config::Reader> parseConfig(kj::StringPtr text, kj::SourceLocati
 // This is intended to allow multi-line raw text to be specified conveniently using C++11
 // `R"(blah)"` literal syntax, without the need to mess up indentation relative to the
 // surrounding code.
-kj::String operator "" _blockquote(const char* str, size_t n) {
+kj::String operator""_blockquote(const char* str, size_t n) {
   kj::StringPtr text(str, n);
 
   // Ignore a leading newline so that `R"(` can be placed on the line before the initial indent.
@@ -69,7 +71,7 @@ kj::String operator "" _blockquote(const char* str, size_t n) {
   while (text != nullptr) {
     // Add data from this line.
     auto nl = text.findFirst('\n').orDefault(text.size() - 1) + 1;
-    result.addAll(text.slice(0, nl));
+    result.addAll(text.first(nl));
     text = text.slice(nl);
 
     // Skip indent of next line, up to the expected indent size.
@@ -85,9 +87,10 @@ kj::String operator "" _blockquote(const char* str, size_t n) {
 }
 
 class TestStream {
-public:
+ public:
   TestStream(kj::WaitScope& ws, kj::Own<kj::AsyncIoStream> stream)
-      : ws(ws), stream(kj::mv(stream)) {}
+      : ws(ws),
+        stream(kj::mv(stream)) {}
 
   void send(kj::StringPtr data, kj::SourceLocation loc = {}) {
     stream->write(data.asBytes()).wait(ws);
@@ -129,19 +132,22 @@ public:
   }
 
   void sendHttpGet(kj::StringPtr path, kj::SourceLocation loc = {}) {
-    send(kj::str(
-        "GET ", path, " HTTP/1.1\n"
-        "Host: foo\n"
-        "\n"), loc);
+    send(kj::str("GET ", path,
+             " HTTP/1.1\n"
+             "Host: foo\n"
+             "\n"),
+        loc);
   }
 
   void recvHttp200(kj::StringPtr expectedResponse, kj::SourceLocation loc = {}) {
-    recv(kj::str(
-        "HTTP/1.1 200 OK\n"
-        "Content-Length: ", expectedResponse.size(), "\n"
-        "Content-Type: text/plain;charset=UTF-8\n"
-        "\n",
-        expectedResponse), loc);
+    recv(kj::str("HTTP/1.1 200 OK\n"
+                 "Content-Length: ",
+             expectedResponse.size(),
+             "\n"
+             "Content-Type: text/plain;charset=UTF-8\n"
+             "\n",
+             expectedResponse),
+        loc);
   }
 
   void httpGet200(kj::StringPtr path, kj::StringPtr expectedResponse, kj::SourceLocation loc = {}) {
@@ -183,7 +189,8 @@ public:
       Sec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==
       Sec-WebSocket-Version: 13
 
-    )"_blockquote, {});
+    )"_blockquote,
+        {});
 
     recv(R"(
       HTTP/1.1 101 Switching Protocols
@@ -191,10 +198,11 @@ public:
       Upgrade: websocket
       Sec-WebSocket-Accept: ICX+Yqv66kxgM0FcWaLWlFLwTAI=
 
-    )"_blockquote, {});
+    )"_blockquote,
+        {});
   }
 
-private:
+ private:
   kj::WaitScope& ws;
   kj::Own<kj::AsyncIoStream> stream;
 
@@ -258,17 +266,14 @@ private:
       realPayloadLength = (static_cast<size_t>(header[2]) << 8) + static_cast<size_t>(header[3]);
     } else if (sevenBitPayloadLength == 127) {
       tryRead(header, 8, "reading 64-bit payload length");
-      realPayloadLength = (static_cast<size_t>(header[2]) << 56)
-        + (static_cast<size_t>(header[3]) << 48)
-        + (static_cast<size_t>(header[4]) << 40)
-        + (static_cast<size_t>(header[5]) << 32)
-        + (static_cast<size_t>(header[6]) << 24)
-        + (static_cast<size_t>(header[7]) << 16)
-        + (static_cast<size_t>(header[8]) << 8)
-        + (static_cast<size_t>(header[9]));
+      realPayloadLength = (static_cast<size_t>(header[2]) << 56) +
+          (static_cast<size_t>(header[3]) << 48) + (static_cast<size_t>(header[4]) << 40) +
+          (static_cast<size_t>(header[5]) << 32) + (static_cast<size_t>(header[6]) << 24) +
+          (static_cast<size_t>(header[7]) << 16) + (static_cast<size_t>(header[8]) << 8) +
+          (static_cast<size_t>(header[9]));
 
       KJ_REQUIRE(realPayloadLength <= maxMessageSize,
-        kj::str("Payload size too big (", realPayloadLength, " > ", maxMessageSize, ")"));
+          kj::str("Payload size too big (", realPayloadLength, " > ", maxMessageSize, ")"));
     }
 
     if (masked) {
@@ -293,7 +298,7 @@ private:
     while (bytesRead < bytesToRead) {
       auto promise = stream->tryRead(buffer.begin() + pos, 1, buffer.size() - pos);
       KJ_REQUIRE(promise.poll(ws), kj::str("No data available while ", what));
-        // A tryRead() of 1 byte didn't resolve, there must be no data to read.
+      // A tryRead() of 1 byte didn't resolve, there must be no data to read.
 
       size_t n = promise.wait(ws);
       KJ_REQUIRE(n > 0, kj::str("Not enough data while ", what));
@@ -303,7 +308,7 @@ private:
 };
 
 class TestServer final: private kj::Filesystem, private kj::EntropySource, private kj::Clock {
-public:
+ public:
   TestServer(kj::StringPtr configText, kj::SourceLocation loc = {})
       : ws(loop),
         config(parseConfig(configText, loc)),
@@ -311,14 +316,18 @@ public:
         pwd(kj::Path({"current", "dir"})),
         cwd(root->openSubdir(pwd, kj::WriteMode::CREATE | kj::WriteMode::CREATE_PARENT)),
         timer(kj::origin<kj::TimePoint>()),
-        server(*this, timer, mockNetwork, *this, Worker::ConsoleMode::INSPECTOR_ONLY,
-                [this](kj::String error) {
-          if (expectedErrors.startsWith(error) && expectedErrors[error.size()] == '\n') {
-            expectedErrors = expectedErrors.slice(error.size() + 1);
-          } else {
-            KJ_FAIL_EXPECT(error, expectedErrors);
-          }
-        }),
+        server(*this,
+            timer,
+            mockNetwork,
+            *this,
+            Worker::ConsoleMode::INSPECTOR_ONLY,
+            [this](kj::String error) {
+              if (expectedErrors.startsWith(error) && expectedErrors[error.size()] == '\n') {
+                expectedErrors = expectedErrors.slice(error.size() + 1);
+              } else {
+                KJ_FAIL_EXPECT(error, expectedErrors);
+              }
+            }),
         fakeDate(kj::UNIX_EPOCH),
         mockNetwork(*this, {}, {}) {}
 
@@ -338,8 +347,8 @@ public:
   // Start the server. Call before connect().
   void start(kj::Promise<void> drainWhen = kj::NEVER_DONE) {
     KJ_REQUIRE(runTask == kj::none);
-    auto task = server.run(v8System, *config, kj::mv(drainWhen))
-        .eagerlyEvaluate([](kj::Exception&& e) {
+    auto task =
+        server.run(v8System, *config, kj::mv(drainWhen)).eagerlyEvaluate([](kj::Exception&& e) {
       KJ_FAIL_EXPECT(e);
     });
     KJ_EXPECT(!task.poll(ws));
@@ -358,6 +367,12 @@ public:
   // config; the actual connection is in-memory with no network involved.
   TestStream connect(kj::StringPtr addr) {
     return TestStream(ws, KJ_REQUIRE_NONNULL(sockets.find(addr), addr)->connect().wait(ws));
+  }
+
+  // Try to connect to the address and return whether or not this connection attempt hangs,
+  // i.e. a listener exists but connections are not being accepted.
+  bool connectHangs(kj::StringPtr addr) {
+    return !KJ_REQUIRE_NONNULL(sockets.find(addr), addr)->connect().poll(ws);
   }
 
   // Expect an incoming connection on the given address and from a network with the given
@@ -380,8 +395,7 @@ public:
     return TestStream(ws, kj::mv(pipe.ends[1]));
   }
 
-  TestStream receiveInternetSubrequest(kj::StringPtr addr,
-      kj::SourceLocation loc = {}) {
+  TestStream receiveInternetSubrequest(kj::StringPtr addr, kj::SourceLocation loc = {}) {
     return receiveSubrequest(addr, {"public"_kj}, {}, loc);
   }
 
@@ -411,7 +425,7 @@ public:
 
   kj::Date fakeDate;
 
-private:
+ private:
   kj::UnwindDetector unwindDetector;
 
   // ---------------------------------------------------------------------------
@@ -445,25 +459,28 @@ private:
 
   SubrequestQueue& getSubrequestQueue(kj::StringPtr addr) {
     return *subrequests.findOrCreate(addr, [&]() -> decltype(subrequests)::Entry {
-      return { kj::str(addr), kj::heap<SubrequestQueue>() };
+      return {kj::str(addr), kj::heap<SubrequestQueue>()};
     });
   }
 
-  static kj::String peerFilterToString(kj::ArrayPtr<const kj::StringPtr> allow,
-                                       kj::ArrayPtr<const kj::StringPtr> deny) {
+  static kj::String peerFilterToString(
+      kj::ArrayPtr<const kj::StringPtr> allow, kj::ArrayPtr<const kj::StringPtr> deny) {
     if (allow == nullptr && deny == nullptr) {
       return kj::str("(none)");
     } else {
-      return kj::str(
-          "allow: [", kj::strArray(allow, ", "), "], "
-          "deny: [", kj::strArray(deny, ", "), "]");
+      return kj::str("allow: [", kj::strArray(allow, ", "),
+          "], "
+          "deny: [",
+          kj::strArray(deny, ", "), "]");
     }
   }
 
   class MockAddress final: public kj::NetworkAddress {
-  public:
+   public:
     MockAddress(TestServer& test, kj::StringPtr peerFilter, kj::String address)
-        : test(test), peerFilter(peerFilter), address(kj::mv(address)) {}
+        : test(test),
+          peerFilter(peerFilter),
+          address(kj::mv(address)) {}
 
     kj::Promise<kj::Own<kj::AsyncIoStream>> connect() override {
       KJ_IF_SOME(addr, test.sockets.find(address)) {
@@ -473,18 +490,16 @@ private:
 
       auto [promise, fulfiller] = kj::newPromiseAndFulfiller<kj::Own<kj::AsyncIoStream>>();
 
-      test.getSubrequestQueue(address).push({
-        kj::mv(fulfiller), peerFilter
-      });
+      test.getSubrequestQueue(address).push({kj::mv(fulfiller), peerFilter});
 
       return kj::mv(promise);
     }
     kj::Own<kj::ConnectionReceiver> listen() override {
       auto pipe = kj::newCapabilityPipe();
       auto receiver = kj::heap<kj::CapabilityStreamConnectionReceiver>(*pipe.ends[0])
-          .attach(kj::mv(pipe.ends[0]));
+                          .attach(kj::mv(pipe.ends[0]));
       auto sender = kj::heap<kj::CapabilityStreamNetworkAddress>(kj::none, *pipe.ends[1])
-          .attach(kj::mv(pipe.ends[1]));
+                        .attach(kj::mv(pipe.ends[1]));
       test.sockets.insert(kj::str(address), kj::mv(sender));
       return receiver;
     }
@@ -495,14 +510,14 @@ private:
       KJ_UNIMPLEMENTED("unused");
     }
 
-  private:
+   private:
     TestServer& test;
     kj::StringPtr peerFilter;
     kj::String address;
   };
 
   class MockNetwork final: public kj::Network {
-  public:
+   public:
     MockNetwork(TestServer& test,
         kj::ArrayPtr<const kj::StringPtr> allow,
         kj::ArrayPtr<const kj::StringPtr> deny)
@@ -517,13 +532,12 @@ private:
       KJ_UNIMPLEMENTED("unused");
     }
     kj::Own<kj::Network> restrictPeers(
-        kj::ArrayPtr<const kj::StringPtr> allow,
-        kj::ArrayPtr<const kj::StringPtr> deny) override {
+        kj::ArrayPtr<const kj::StringPtr> allow, kj::ArrayPtr<const kj::StringPtr> deny) override {
       KJ_ASSERT(filter == "(none)", "can't nest restrictPeers()");
       return kj::heap<MockNetwork>(test, allow, deny);
     }
 
-  private:
+   private:
     TestServer& test;
     kj::String filter;
   };
@@ -554,7 +568,8 @@ kj::String singleWorker(kj::StringPtr def) {
   return kj::str(R"((
     services = [
       ( name = "hello",
-        worker = )"_kj, def, R"(
+        worker = )"_kj,
+      def, R"(
       )
     ],
     sockets = [
@@ -564,7 +579,6 @@ kj::String singleWorker(kj::StringPtr def) {
       )
     ]
   ))"_kj);
-
 }
 
 KJ_TEST("Server: serve basic Service Worker") {
@@ -709,7 +723,8 @@ KJ_TEST("Server: compatibility dates") {
   // The easiest flag to test is the presence of the global `navigator`.
   auto selfNavigatorCheckerWorker = [](kj::StringPtr compatProperties) {
     return singleWorker(kj::str(R"((
-      )", compatProperties, R"(,
+      )",
+        compatProperties, R"(,
       modules = [
         ( name = "main.js",
           esModule =
@@ -960,13 +975,13 @@ KJ_TEST("Server: WebCrypto bindings") {
       "hmac verifications: true, false\n"
       "hmac extractable? false\n"
       "hmac signature (hex key) is "
-          "4a27693183b28d2616209d6ff5e77646af5fc06ea6affac37415995b07be2ddf\n"
+      "4a27693183b28d2616209d6ff5e77646af5fc06ea6affac37415995b07be2ddf\n"
       "hmac signature (base64 key) is "
-          "4a27693183b28d2616209d6ff5e77646af5fc06ea6affac37415995b07be2ddf\n"
+      "4a27693183b28d2616209d6ff5e77646af5fc06ea6affac37415995b07be2ddf\n"
       "hmac signature (jwk key) is "
-          "4a27693183b28d2616209d6ff5e77646af5fc06ea6affac37415995b07be2ddf\n"
+      "4a27693183b28d2616209d6ff5e77646af5fc06ea6affac37415995b07be2ddf\n"
       "verification with hmacHex was not allowed: "
-          "Requested key usage \"verify\" does not match any usage listed in this CryptoKey.\n"
+      "Requested key usage \"verify\" does not match any usage listed in this CryptoKey.\n"
       "ec verification: true\n"
       "ec extractable? false, true");
 }
@@ -1421,9 +1436,71 @@ KJ_TEST("Server: invalid entrypoint") {
 
   test.expectErrors(
       "Worker \"hello\"'s binding \"svc\" refers to service \"hello\" with a named entrypoint "
-          "\"bar\", but \"hello\" has no such named entrypoint.\n"
+      "\"bar\", but \"hello\" has no such named entrypoint.\n"
       "Socket \"alt1\" refers to service \"hello\" with a named entrypoint \"foo\", but \"hello\" "
-          "has no such named entrypoint.\n");
+      "has no such named entrypoint.\n");
+}
+
+KJ_TEST("Server: referencing non-extant default entrypoint is not an error") {
+  // For historical reasons, it's not a config error to refer to to the default entrypoint of
+  // a service that has no default export.
+  TestServer test(R"((
+    services = [
+      ( name = "hello",
+        worker = (
+          compatibilityDate = "2022-08-17",
+          modules = [
+            ( name = "main.js",
+              esModule =
+                `export let alt = {
+                `  async fetch(request, env) {
+                `    return new Response("OK");
+                `  }
+                `}
+            )
+          ],
+        )
+      ),
+    ],
+    sockets = [
+      ( name = "main", address = "test-addr", service = "hello" ),
+    ]
+  ))"_kj);
+  test.start();
+
+  // A request will still fail at runtime, but we shouldn't have seen startup/config errors.
+  auto conn = test.connect("test-addr");
+  conn.sendHttpGet("/");
+
+  // Due to the Deep Magic (bugs) going back to the dawn of Module Workers, if an HTTP request is
+  // delivered to the default entrypoint of a module worker that has no default export, then the
+  // system will fall back to calling event handlers registered with addEventListener("fetch").
+  //
+  // There is a magic deeper still in which, due to mistakes introduced in the stillness and the
+  // darkness before Module Workers dawned, if none of those event listeners call
+  // `event.respondWith()` (perhaps because *there are no event listeners*), then the request falls
+  // back to default handling, in which it simply passes through to fetch() and makes a subrequest.
+  //
+  // So... we expect... a subrequest...
+  {
+    auto subreq = test.receiveSubrequest("foo", {"public"});
+    subreq.recv(R"(
+      GET / HTTP/1.1
+      Host: foo
+
+    )"_blockquote);
+    subreq.send(R"(
+      HTTP/1.1 200 OK
+      Content-Length: 3
+
+      wat)"_blockquote);
+  }
+
+  conn.recv(R"(
+    HTTP/1.1 200 OK
+    Content-Length: 3
+
+    wat)"_blockquote);
 }
 
 KJ_TEST("Server: call queue handler on service binding") {
@@ -1545,20 +1622,20 @@ KJ_TEST("Server: Durable Objects (in memory)") {
 
   test.start();
   auto conn = test.connect("test-addr");
-  conn.httpGet200("/",
-      "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 0");
-  conn.httpGet200("/",
-      "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 1");
-  conn.httpGet200("/",
-      "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 2");
-  conn.httpGet200("/bar",
-      "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79: http://foo/bar 0");
-  conn.httpGet200("/bar",
-      "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79: http://foo/bar 1");
-  conn.httpGet200("/",
-      "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 3");
-  conn.httpGet200("/bar",
-      "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79: http://foo/bar 2");
+  conn.httpGet200(
+      "/", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 0");
+  conn.httpGet200(
+      "/", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 1");
+  conn.httpGet200(
+      "/", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 2");
+  conn.httpGet200(
+      "/bar", "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79: http://foo/bar 0");
+  conn.httpGet200(
+      "/bar", "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79: http://foo/bar 1");
+  conn.httpGet200(
+      "/", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 3");
+  conn.httpGet200(
+      "/bar", "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79: http://foo/bar 2");
 }
 
 KJ_TEST("Server: Durable Objects (on disk)") {
@@ -1621,24 +1698,24 @@ KJ_TEST("Server: Durable Objects (on disk)") {
     TestServer test(config);
 
     // Link our directory into the test filesystem.
-    test.root->transfer(
-        kj::Path({"var"_kj, "do-storage"_kj}), kj::WriteMode::CREATE | kj::WriteMode::CREATE_PARENT,
-        *dir, nullptr, kj::TransferMode::LINK);
+    test.root->transfer(kj::Path({"var"_kj, "do-storage"_kj}),
+        kj::WriteMode::CREATE | kj::WriteMode::CREATE_PARENT, *dir, nullptr,
+        kj::TransferMode::LINK);
 
     test.start();
     auto conn = test.connect("test-addr");
-    conn.httpGet200("/",
-        "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 0");
-    conn.httpGet200("/",
-        "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 1");
-    conn.httpGet200("/",
-        "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 2");
+    conn.httpGet200(
+        "/", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 0");
+    conn.httpGet200(
+        "/", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 1");
+    conn.httpGet200(
+        "/", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 2");
     conn.httpGet200("/bar",
         "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79: http://foo/bar 0");
     conn.httpGet200("/bar",
         "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79: http://foo/bar 1");
-    conn.httpGet200("/",
-        "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 3");
+    conn.httpGet200(
+        "/", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 3");
     conn.httpGet200("/bar",
         "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79: http://foo/bar 2");
 
@@ -1648,38 +1725,38 @@ KJ_TEST("Server: Durable Objects (on disk)") {
     // KJ-wrapping VFS currently doesn't put this in SHM files. If we were using a real disk
     // directory, though, they would be there.
     KJ_EXPECT(dir->openSubdir(kj::Path({"mykey"}))->listNames().size() == 4);
-    KJ_EXPECT(dir->exists(kj::Path({"mykey",
-      "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79.sqlite"})));
-    KJ_EXPECT(dir->exists(kj::Path({"mykey",
-      "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79.sqlite-wal"})));
-    KJ_EXPECT(dir->exists(kj::Path({"mykey",
-      "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234.sqlite"})));
-    KJ_EXPECT(dir->exists(kj::Path({"mykey",
-      "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234.sqlite-wal"})));
+    KJ_EXPECT(dir->exists(kj::Path(
+        {"mykey", "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79.sqlite"})));
+    KJ_EXPECT(dir->exists(kj::Path(
+        {"mykey", "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79.sqlite-wal"})));
+    KJ_EXPECT(dir->exists(kj::Path(
+        {"mykey", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234.sqlite"})));
+    KJ_EXPECT(dir->exists(kj::Path(
+        {"mykey", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234.sqlite-wal"})));
   }
 
   // Having torn everything down, the WAL files should be gone.
   KJ_EXPECT(dir->openSubdir(kj::Path({"mykey"}))->listNames().size() == 2);
-  KJ_EXPECT(dir->exists(kj::Path({"mykey",
-    "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79.sqlite"})));
-  KJ_EXPECT(dir->exists(kj::Path({"mykey",
-    "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234.sqlite"})));
+  KJ_EXPECT(dir->exists(kj::Path(
+      {"mykey", "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79.sqlite"})));
+  KJ_EXPECT(dir->exists(kj::Path(
+      {"mykey", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234.sqlite"})));
 
   // Let's start a new server and verify it can load the files from disk.
   {
     TestServer test(config);
 
     // Link our directory into the test filesystem.
-    test.root->transfer(
-        kj::Path({"var"_kj, "do-storage"_kj}), kj::WriteMode::CREATE | kj::WriteMode::CREATE_PARENT,
-        *dir, nullptr, kj::TransferMode::LINK);
+    test.root->transfer(kj::Path({"var"_kj, "do-storage"_kj}),
+        kj::WriteMode::CREATE | kj::WriteMode::CREATE_PARENT, *dir, nullptr,
+        kj::TransferMode::LINK);
 
     test.start();
     auto conn = test.connect("test-addr");
-    conn.httpGet200("/",
-        "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 4");
-    conn.httpGet200("/",
-        "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 5");
+    conn.httpGet200(
+        "/", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 4");
+    conn.httpGet200(
+        "/", "59002eb8cf872e541722977a258a12d6a93bbe8192b502e1c0cb250aa91af234: http://foo/ 5");
     conn.httpGet200("/bar",
         "02b496f65dd35cbac90e3e72dc5a398ee93926ea4a3821e26677082d2e6f9b79: http://foo/bar 3");
   }
@@ -1733,20 +1810,13 @@ KJ_TEST("Server: Ephemeral Objects") {
   test.server.allowExperimental();
   test.start();
   auto conn = test.connect("test-addr");
-  conn.httpGet200("/",
-      "http://foo/: http://foo/ 0");
-  conn.httpGet200("/",
-      "http://foo/: http://foo/ 1");
-  conn.httpGet200("/",
-      "http://foo/: http://foo/ 2");
-  conn.httpGet200("/bar",
-      "http://foo/bar: http://foo/bar 0");
-  conn.httpGet200("/bar",
-      "http://foo/bar: http://foo/bar 1");
-  conn.httpGet200("/",
-      "http://foo/: http://foo/ 3");
-  conn.httpGet200("/bar",
-      "http://foo/bar: http://foo/bar 2");
+  conn.httpGet200("/", "http://foo/: http://foo/ 0");
+  conn.httpGet200("/", "http://foo/: http://foo/ 1");
+  conn.httpGet200("/", "http://foo/: http://foo/ 2");
+  conn.httpGet200("/bar", "http://foo/bar: http://foo/bar 0");
+  conn.httpGet200("/bar", "http://foo/bar: http://foo/bar 1");
+  conn.httpGet200("/", "http://foo/: http://foo/ 3");
+  conn.httpGet200("/bar", "http://foo/bar: http://foo/bar 2");
 }
 
 KJ_TEST("Server: Durable Objects (ephemeral) eviction") {
@@ -2015,48 +2085,48 @@ KJ_TEST("Server: Durable Object evictions when callback scheduled") {
   // Create a directory outside of the test scope which we can use across multiple TestServers.
   auto dir = kj::newInMemoryDirectory(kj::nullClock());
   {
-      TestServer test(config);
-      // Link our directory into the test filesystem.
-      test.root->transfer(
-          kj::Path({"var"_kj, "do-storage"_kj}), kj::WriteMode::CREATE | kj::WriteMode::CREATE_PARENT,
-          *dir, nullptr, kj::TransferMode::LINK);
+    TestServer test(config);
+    // Link our directory into the test filesystem.
+    test.root->transfer(kj::Path({"var"_kj, "do-storage"_kj}),
+        kj::WriteMode::CREATE | kj::WriteMode::CREATE_PARENT, *dir, nullptr,
+        kj::TransferMode::LINK);
 
-      test.start();
-      auto conn = test.connect("test-addr");
-      // Setup a callback that will run in 15 seconds.
-      // This callback should prevent the DO from being evicted.
-      conn.httpGet200("/15Seconds", "OK");
+    test.start();
+    auto conn = test.connect("test-addr");
+    // Setup a callback that will run in 15 seconds.
+    // This callback should prevent the DO from being evicted.
+    conn.httpGet200("/15Seconds", "OK");
 
-      // If we weren't waiting on anything, the DO would be evicted after 10 seconds,
-      // however, it will actually be evicted in 25 seconds (15 seconds until setInterval is cleared +
-      // 10 seconds for inactivity timer).
+    // If we weren't waiting on anything, the DO would be evicted after 10 seconds,
+    // however, it will actually be evicted in 25 seconds (15 seconds until setInterval is cleared +
+    // 10 seconds for inactivity timer).
 
-      test.wait(15);
-      // The `setInterval()` will be cleared around now. Let's verify that we didn't get evicted.
+    test.wait(15);
+    // The `setInterval()` will be cleared around now. Let's verify that we didn't get evicted.
 
-      // Need a new connection because of 5 second HTTP timeout.
-      auto connTwo = test.connect("test-addr");
-      connTwo.httpGet200("/assertActive", "OK");
+    // Need a new connection because of 5 second HTTP timeout.
+    auto connTwo = test.connect("test-addr");
+    connTwo.httpGet200("/assertActive", "OK");
 
-      // Force hibernation by waiting at least 10 seconds since we haven't scheduled any new work.
-      test.wait(10);
+    // Force hibernation by waiting at least 10 seconds since we haven't scheduled any new work.
+    test.wait(10);
 
-      // Need a new connection because of 5 second HTTP timeout.
-      auto connThree = test.connect("test-addr");
-      connThree.httpGet200("/assertEvicted", "OK");
+    // Need a new connection because of 5 second HTTP timeout.
+    auto connThree = test.connect("test-addr");
+    connThree.httpGet200("/assertEvicted", "OK");
 
-      // Now we know we aren't evicting DOs early if they have future work scheduled. Next, let's
-      // ensure we ARE evicting DOs if there are no connected clients for 70 seconds.
-      // Note that the `/20seconds` path calls setInterval to run every 20 seconds, and never clears.
-      auto connFour = test.connect("test-addr");
-      connFour.httpGet200("/20Seconds", "OK");
-      // It's unlikely, but the worst case is the cleanupLoop checks just before the 70 sec expiration,
-      // and has to wait another 70 seconds before trying to remove again. We'll wait for 142 seconds
-      // to account for this.
-      test.wait(142);
+    // Now we know we aren't evicting DOs early if they have future work scheduled. Next, let's
+    // ensure we ARE evicting DOs if there are no connected clients for 70 seconds.
+    // Note that the `/20seconds` path calls setInterval to run every 20 seconds, and never clears.
+    auto connFour = test.connect("test-addr");
+    connFour.httpGet200("/20Seconds", "OK");
+    // It's unlikely, but the worst case is the cleanupLoop checks just before the 70 sec expiration,
+    // and has to wait another 70 seconds before trying to remove again. We'll wait for 142 seconds
+    // to account for this.
+    test.wait(142);
 
-      auto connFive = test.connect("test-addr");
-      connFive.httpGet200("/assertEvictedAndCount", "OK");
+    auto connFive = test.connect("test-addr");
+    connFive.httpGet200("/assertEvictedAndCount", "OK");
   }
 }
 
@@ -2283,6 +2353,104 @@ KJ_TEST("Server: Durable Objects websocket hibernation") {
   wsConn.send(kj::str("\x81\x1a", confirmEviction));
   wsConn.recvWebSocket(evicted);
 }
+
+KJ_TEST("Server: tail workers") {
+  TestServer test(R"((
+    services = [
+      ( name = "hello",
+        worker = (
+          compatibilityDate = "2024-11-01",
+          modules = [
+            ( name = "main.js",
+              esModule =
+                `export default {
+                `  async fetch(req, env, ctx) {
+                `    console.log("foo", "bar");
+                `    console.log("baz");
+                `    return new Response("OK");
+                `  }
+                `}
+            )
+          ],
+          tails = ["tail", "tail2"],
+        )
+      ),
+      ( name = "tail",
+        worker = (
+          compatibilityDate = "2024-11-01",
+          modules = [
+            ( name = "main.js",
+              esModule =
+                `export default {
+                `  async tail(req, env, ctx) {
+                `    await fetch("http://tail", {
+                `      method: "POST",
+                `      body: JSON.stringify(req[0].logs.map(log => log.message))
+                `    });
+                `  }
+                `}
+            )
+          ],
+        )
+      ),
+      ( name = "tail2",
+        worker = (
+          compatibilityDate = "2024-11-01",
+          modules = [
+            ( name = "main.js",
+              esModule =
+                `export default {
+                `  async tail(req, env, ctx) {
+                `    await fetch("http://tail2/" + req[0].logs.length);
+                `  }
+                `}
+            )
+          ],
+        )
+      ),
+    ],
+    sockets = [
+      ( name = "main",
+        address = "test-addr",
+        service = "hello"
+      )
+    ]
+  ))"_kj);
+
+  test.start();
+  auto conn = test.connect("test-addr");
+  conn.sendHttpGet("/");
+  conn.recvHttp200("OK");
+
+  auto subreq = test.receiveInternetSubrequest("tail");
+  subreq.recv(R"(
+    POST / HTTP/1.1
+    Content-Length: 23
+    Host: tail
+    Content-Type: text/plain;charset=UTF-8
+
+    [["foo","bar"],["baz"]])"_blockquote);
+
+  auto subreq2 = test.receiveInternetSubrequest("tail2");
+  subreq2.recv(R"(
+    GET /2 HTTP/1.1
+    Host: tail2
+
+    )"_blockquote);
+
+  subreq.send(R"(
+    HTTP/1.1 200 OK
+    Content-Length: 0
+
+  )"_blockquote);
+
+  subreq2.send(R"(
+    HTTP/1.1 200 OK
+    Content-Length: 0
+
+  )"_blockquote);
+}
+
 // =======================================================================================
 // Test HttpOptions on receive
 
@@ -2533,6 +2701,9 @@ KJ_TEST("Server: drain incoming HTTP connections") {
 
   // But conn2 is still open.
   KJ_EXPECT(!conn2.isEof());
+
+  // New connections shouldn't be accepted at this point.
+  KJ_EXPECT(test.connectHangs("test-addr"));
 
   // Finish the request on conn2.
   conn2.send(" / HTTP/1.1\nHost: foo\n\n");
@@ -2821,12 +2992,12 @@ KJ_TEST("Server: disk service") {
 
   auto mode = kj::WriteMode::CREATE | kj::WriteMode::CREATE_PARENT;
   auto dir = test.root->openSubdir(kj::Path({"frob"_kj, "blah"_kj}), mode);
-  test.fakeDate = kj::UNIX_EPOCH + 2 * kj::DAYS + 5 * kj::HOURS +
-                  18 * kj::MINUTES + 23 * kj::SECONDS;
+  test.fakeDate =
+      kj::UNIX_EPOCH + 2 * kj::DAYS + 5 * kj::HOURS + 18 * kj::MINUTES + 23 * kj::SECONDS;
   dir->openFile(kj::Path({"foo.txt"}), mode)->writeAll("hello from foo.txt\n");
   dir->openFile(kj::Path({"numbers.txt"}), mode)->writeAll("0123456789\n");
-  test.fakeDate = kj::UNIX_EPOCH + 400 * kj::DAYS + 2 * kj::HOURS +
-                  52 * kj::MINUTES + 9 * kj::SECONDS + 163 * kj::MILLISECONDS;
+  test.fakeDate = kj::UNIX_EPOCH + 400 * kj::DAYS + 2 * kj::HOURS + 52 * kj::MINUTES +
+      9 * kj::SECONDS + 163 * kj::MILLISECONDS;
   dir->openFile(kj::Path({"bar.txt"}), mode)->writeAll("hello from bar.txt\n");
   test.fakeDate = kj::UNIX_EPOCH;
   dir->openFile(kj::Path({"baz", "qux.txt"}), mode)->writeAll("hello from qux.txt\n");
@@ -3313,12 +3484,9 @@ KJ_TEST("Server: If no cache service is defined, access to the cache API should 
     ]
   ))"_kj));
 
-
   test.start();
   auto conn = test.connect("test-addr");
-  conn.httpGet200("/",
-      "No Cache was configured");
-
+  conn.httpGet200("/", "No Cache was configured");
 }
 
 KJ_TEST("Server: cached response") {
@@ -3378,7 +3546,6 @@ KJ_TEST("Server: cached response") {
     CF-Cache-Status: HIT
 
     cached)"_blockquote);
-
 }
 
 KJ_TEST("Server: cache name is passed through to service") {
@@ -3590,6 +3757,53 @@ KJ_TEST("Server: JS RPC over HTTP connections") {
 
   auto conn = test.connect("test-addr");
   conn.httpGet200("/", "got: 35");
+}
+
+KJ_TEST("Server: Entrypoint binding with props") {
+  TestServer test(R"((
+    services = [
+      ( name = "hello",
+        worker = (
+          compatibilityDate = "2024-02-23",
+          compatibilityFlags = ["experimental"],
+          modules = [
+            ( name = "main.js",
+              esModule =
+                `import {WorkerEntrypoint} from "cloudflare:workers";
+                `export default {
+                `  async fetch(request, env) {
+                `    return new Response("got: " + await env.MyRpc.getProps());
+                `  }
+                `}
+                `export class MyRpc extends WorkerEntrypoint {
+                `  getProps() { return this.ctx.props.foo; }
+                `}
+            )
+          ],
+          bindings = [
+            ( name = "MyRpc",
+              service = (
+                name = "hello",
+                entrypoint = "MyRpc",
+                props = (
+                  json = `{"foo": 123}
+                )
+              )
+            )
+          ]
+        )
+      ),
+    ],
+    sockets = [
+      ( name = "main", address = "test-addr", service = "hello" ),
+    ]
+  ))"_kj);
+
+  test.server.allowExperimental();
+  test.start();
+
+  auto conn = test.connect("test-addr");
+  conn.httpGet200("/", "got: 123");
 }
 
 // =======================================================================================

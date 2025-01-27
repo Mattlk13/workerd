@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <kj/async.h>
-#include <kj/common.h>
-
 #include <workerd/api/basics.h>
 #include <workerd/io/worker-interface.capnp.h>
 #include <workerd/io/worker-interface.h>
 #include <workerd/jsg/jsg.h>
+
+#include <kj/async.h>
+#include <kj/common.h>
 
 namespace workerd::api {
 
@@ -20,11 +20,10 @@ class ExecutionContext;
 
 // A capability to a Worker Queue.
 class WorkerQueue: public jsg::Object {
-public:
+ public:
   // `subrequestChannel` is what to pass to IoContext::getHttpClient() to get an HttpClient
   // representing this queue.
-  WorkerQueue(uint subrequestChannel)
-    : subrequestChannel(subrequestChannel) {}
+  WorkerQueue(uint subrequestChannel): subrequestChannel(subrequestChannel) {}
 
   struct SendOptions {
     // TODO(soon): Support metadata.
@@ -68,8 +67,9 @@ public:
 
   kj::Promise<void> send(jsg::Lock& js, jsg::JsValue body, jsg::Optional<SendOptions> options);
 
-  kj::Promise<void> sendBatch(jsg::Lock& js, jsg::Sequence<MessageSendRequest> batch,
-                              jsg::Optional<SendBatchOptions> options);
+  kj::Promise<void> sendBatch(jsg::Lock& js,
+      jsg::Sequence<MessageSendRequest> batch,
+      jsg::Optional<SendBatchOptions> options);
 
   JSG_RESOURCE_TYPE(WorkerQueue) {
     JSG_METHOD(send);
@@ -85,7 +85,7 @@ public:
     JSG_TS_DEFINE(type QueueContentType = "text" | "bytes" | "json" | "v8");
   }
 
-private:
+ private:
   uint subrequestChannel;
 };
 
@@ -152,14 +152,20 @@ struct QueueRetryOptions {
 };
 
 class QueueMessage final: public jsg::Object {
-public:
+ public:
   QueueMessage(jsg::Lock& js, rpc::QueueMessage::Reader message, IoPtr<QueueEventResult> result);
   QueueMessage(jsg::Lock& js, IncomingQueueMessage message, IoPtr<QueueEventResult> result);
 
-  kj::StringPtr getId() { return id; }
-  kj::Date getTimestamp() { return timestamp; }
+  kj::StringPtr getId() {
+    return id;
+  }
+  kj::Date getTimestamp() {
+    return timestamp;
+  }
   jsg::JsValue getBody(jsg::Lock& js);
-  uint16_t getAttempts() { return attempts; };
+  uint16_t getAttempts() {
+    return attempts;
+  };
 
   void retry(jsg::Optional<QueueRetryOptions> options);
   void ack();
@@ -185,7 +191,7 @@ public:
     tracker.trackFieldWithSize("IoPtr<QueueEventResult>", sizeof(IoPtr<QueueEventResult>));
   }
 
-private:
+ private:
   kj::String id;
   kj::Date timestamp;
   jsg::JsRef<jsg::JsValue> body;
@@ -198,7 +204,7 @@ private:
 };
 
 class QueueEvent final: public ExtendableEvent {
-public:
+ public:
   // TODO(cleanup): Should we get around the need for this alternative param type by just having the
   // service worker caller provide us with capnp-serialized params?
   struct Params {
@@ -206,13 +212,19 @@ public:
     kj::Array<IncomingQueueMessage> messages;
   };
 
-  explicit QueueEvent(jsg::Lock& js, rpc::EventDispatcher::QueueParams::Reader params, IoPtr<QueueEventResult> result);
+  explicit QueueEvent(jsg::Lock& js,
+      rpc::EventDispatcher::QueueParams::Reader params,
+      IoPtr<QueueEventResult> result);
   explicit QueueEvent(jsg::Lock& js, Params params, IoPtr<QueueEventResult> result);
 
   static jsg::Ref<QueueEvent> constructor(kj::String type) = delete;
 
-  kj::ArrayPtr<jsg::Ref<QueueMessage>> getMessages() { return messages; }
-  kj::StringPtr getQueueName() { return queueName; }
+  kj::ArrayPtr<jsg::Ref<QueueMessage>> getMessages() {
+    return messages;
+  }
+  kj::StringPtr getQueueName() {
+    return queueName;
+  }
 
   void retryAll(jsg::Optional<QueueRetryOptions> options);
   void ackAll();
@@ -255,7 +267,7 @@ public:
     return completionStatus;
   }
 
-private:
+ private:
   // TODO(perf): Should we store these in a v8 array directly rather than this intermediate kj
   // array to avoid one intermediate copy?
   kj::Array<jsg::Ref<QueueMessage>> messages;
@@ -270,16 +282,21 @@ private:
 
 // Type used when calling a module-exported queue event handler.
 class QueueController final: public jsg::Object {
-public:
-  QueueController(jsg::Ref<QueueEvent> event)
-      : event(kj::mv(event)) {}
+ public:
+  QueueController(jsg::Ref<QueueEvent> event): event(kj::mv(event)) {}
 
-  kj::ArrayPtr<jsg::Ref<QueueMessage>> getMessages() { return event->getMessages(); }
-  kj::StringPtr getQueueName() { return event->getQueueName(); }
+  kj::ArrayPtr<jsg::Ref<QueueMessage>> getMessages() {
+    return event->getMessages();
+  }
+  kj::StringPtr getQueueName() {
+    return event->getQueueName();
+  }
   void retryAll(jsg::Optional<QueueRetryOptions> options) {
     event->retryAll(options);
   }
-  void ackAll() { event->ackAll(); }
+  void ackAll() {
+    event->ackAll();
+  }
 
   JSG_RESOURCE_TYPE(QueueController) {
     JSG_READONLY_INSTANCE_PROPERTY(messages, getMessages);
@@ -298,7 +315,7 @@ public:
     tracker.trackField("event", event);
   }
 
-private:
+ private:
   jsg::Ref<QueueEvent> event;
 
   void visitForGc(jsg::GcVisitor& visitor) {
@@ -309,28 +326,26 @@ private:
 // Extension of ExportedHandler covering queue handlers.
 struct QueueExportedHandler {
   typedef kj::Promise<void> QueueHandler(jsg::Ref<QueueController> controller,
-                                         jsg::JsRef<jsg::JsValue> env,
-                                         jsg::Optional<jsg::Ref<ExecutionContext>> ctx);
+      jsg::JsRef<jsg::JsValue> env,
+      jsg::Optional<jsg::Ref<ExecutionContext>> ctx);
   jsg::LenientOptional<jsg::Function<QueueHandler>> queue;
 
   JSG_STRUCT(queue);
 };
 
 class QueueCustomEventImpl final: public WorkerInterface::CustomEvent, public kj::Refcounted {
-public:
+ public:
   QueueCustomEventImpl(
       kj::OneOf<QueueEvent::Params, rpc::EventDispatcher::QueueParams::Reader> params)
       : params(kj::mv(params)) {}
 
-  kj::Promise<Result> run(
-      kj::Own<IoContext_IncomingRequest> incomingRequest,
+  kj::Promise<Result> run(kj::Own<IoContext_IncomingRequest> incomingRequest,
       kj::Maybe<kj::StringPtr> entrypointName,
+      Frankenvalue props,
       kj::TaskSet& waitUntilTasks) override;
 
-  kj::Promise<Result> sendRpc(
-      capnp::HttpOverCapnpFactory& httpOverCapnpFactory,
+  kj::Promise<Result> sendRpc(capnp::HttpOverCapnpFactory& httpOverCapnpFactory,
       capnp::ByteStreamFactory& byteStreamFactory,
-      kj::TaskSet& waitUntilTasks,
       rpc::EventDispatcher::Client dispatcher) override;
 
   static const uint16_t EVENT_TYPE = 5;
@@ -341,28 +356,25 @@ public:
   QueueRetryBatch getRetryBatch() const {
     return {.retry = result.retryBatch.retry, .delaySeconds = result.retryBatch.delaySeconds};
   }
-  bool getAckAll() const { return result.ackAll; }
+  bool getAckAll() const {
+    return result.ackAll;
+  }
   kj::Array<QueueRetryMessage> getRetryMessages() const;
   kj::Array<kj::String> getExplicitAcks() const;
 
-private:
+  kj::Promise<Result> notSupported() override {
+    KJ_UNIMPLEMENTED("queue event not supported");
+  }
+
+ private:
   kj::OneOf<rpc::EventDispatcher::QueueParams::Reader, QueueEvent::Params> params;
   QueueEventResult result;
 };
 
-#define EW_QUEUE_ISOLATE_TYPES \
-  api::WorkerQueue,                     \
-  api::WorkerQueue::SendOptions,        \
-  api::WorkerQueue::SendBatchOptions,   \
-  api::WorkerQueue::MessageSendRequest, \
-  api::IncomingQueueMessage,            \
-  api::QueueRetryBatch,                 \
-  api::QueueRetryMessage,               \
-  api::QueueResponse,                   \
-  api::QueueRetryOptions,               \
-  api::QueueMessage,                    \
-  api::QueueEvent,                      \
-  api::QueueController,                 \
-  api::QueueExportedHandler
+#define EW_QUEUE_ISOLATE_TYPES                                                                     \
+  api::WorkerQueue, api::WorkerQueue::SendOptions, api::WorkerQueue::SendBatchOptions,             \
+      api::WorkerQueue::MessageSendRequest, api::IncomingQueueMessage, api::QueueRetryBatch,       \
+      api::QueueRetryMessage, api::QueueResponse, api::QueueRetryOptions, api::QueueMessage,       \
+      api::QueueEvent, api::QueueController, api::QueueExportedHandler
 
 }  // namespace workerd::api

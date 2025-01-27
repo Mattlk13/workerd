@@ -4,6 +4,8 @@
 
 #include "alarm-scheduler.h"
 
+#include <cmath>
+
 namespace workerd::server {
 
 int AlarmScheduler::maxJitterMsForDelay(kj::Duration delay) {
@@ -22,23 +24,22 @@ std::default_random_engine makeSeededRandomEngine() {
   return engine;
 }
 
-} // namespace
+}  // namespace
 
 AlarmScheduler::AlarmScheduler(
-    const kj::Clock& clock,
-    kj::Timer& timer,
-    const SqliteDatabase::Vfs& vfs,
-    kj::PathPtr path)
-    : clock(clock), timer(timer), random(makeSeededRandomEngine()),
-      db([&]{
-        auto db = kj::heap<SqliteDatabase>(vfs, path,
+    const kj::Clock& clock, kj::Timer& timer, const SqliteDatabase::Vfs& vfs, kj::Path path)
+    : clock(clock),
+      timer(timer),
+      random(makeSeededRandomEngine()),
+      db([&] {
+        auto db = kj::heap<SqliteDatabase>(vfs, kj::mv(path),
             kj::WriteMode::CREATE | kj::WriteMode::MODIFY | kj::WriteMode::CREATE_PARENT);
         ensureInitialized(*db);
         return kj::mv(db);
       }()),
       tasks(*this) {
-    loadAlarmsFromDb();
-  }
+  loadAlarmsFromDb();
+}
 
 void AlarmScheduler::ensureInitialized(SqliteDatabase& db) {
   // TODO(sqlite): Do this automatically at a lower layer?
@@ -68,7 +69,7 @@ void AlarmScheduler::loadAlarmsFromDb() {
 
     auto ownUniqueKey = kj::str(query.getText(0));
     auto ownActorId = kj::str(query.getText(1));
-    auto actor = kj::attachVal(ActorKey { .uniqueKey = ownUniqueKey, .actorId = ownActorId },
+    auto actor = kj::attachVal(ActorKey{.uniqueKey = ownUniqueKey, .actorId = ownActorId},
         kj::mv(ownUniqueKey), kj::mv(ownActorId));
 
     alarms.insert(*actor, scheduleAlarm(now, kj::mv(actor), date));
@@ -78,12 +79,12 @@ void AlarmScheduler::loadAlarmsFromDb() {
 }
 
 void AlarmScheduler::registerNamespace(kj::StringPtr uniqueKey, GetActorFn getActor) {
-  namespaces.insert(uniqueKey, Namespace{
-    .getActor = kj::mv(getActor)
-  });
+  namespaces.insert(uniqueKey, Namespace{.getActor = kj::mv(getActor)});
 }
 
 kj::Maybe<kj::Date> AlarmScheduler::getAlarm(ActorKey actor) {
+  // TODO(someday): Might be able to simplify AlarmScheduler somewhat, now that ActorSqlite no
+  // longer relies on it for getAlarm()?
   KJ_IF_SOME(alarm, alarms.find(actor)) {
     if (alarm.status == AlarmStatus::STARTED) {
       // getAlarm() when the alarm handler is running should return null,
@@ -108,11 +109,11 @@ bool AlarmScheduler::setAlarm(ActorKey actor, kj::Date scheduledTime) {
 
     auto ownUniqueKey = kj::str(actor.uniqueKey);
     auto ownActorId = kj::str(actor.actorId);
-    auto ownActor = kj::attachVal(ActorKey { .uniqueKey = ownUniqueKey, .actorId = ownActorId },
-    kj::mv(ownUniqueKey), kj::mv(ownActorId));
+    auto ownActor = kj::attachVal(ActorKey{.uniqueKey = ownUniqueKey, .actorId = ownActorId},
+        kj::mv(ownUniqueKey), kj::mv(ownActorId));
 
-    return decltype(alarms)::Entry {
-        *ownActor, scheduleAlarm(clock.now(), kj::mv(ownActor), scheduledTime) };
+    return decltype(alarms)::Entry{
+      *ownActor, scheduleAlarm(clock.now(), kj::mv(ownActor), scheduledTime)};
   });
 
   if (existing) {
@@ -155,10 +156,8 @@ kj::Promise<AlarmScheduler::RetryInfo> AlarmScheduler::runAlarm(
   KJ_IF_SOME(ns, namespaces.find(actor.uniqueKey)) {
     auto result = co_await ns.getActor(kj::str(actor.actorId))->runAlarm(scheduledTime, retryCount);
 
-    co_return RetryInfo {
-      .retry = result.outcome != EventOutcome::OK && result.retry,
-      .retryCountsAgainstLimit = result.retryCountsAgainstLimit
-    };
+    co_return RetryInfo{.retry = result.outcome != EventOutcome::OK && result.retry,
+      .retryCountsAgainstLimit = result.retryCountsAgainstLimit};
   } else {
     throw KJ_EXCEPTION(FAILED, "uniqueKey for stored alarm was not registered?");
   }
@@ -168,7 +167,7 @@ AlarmScheduler::ScheduledAlarm AlarmScheduler::scheduleAlarm(
     kj::Date now, kj::Own<ActorKey> actor, kj::Date scheduledTime) {
   auto task = makeAlarmTask(scheduledTime - now, *actor, scheduledTime);
 
-  return ScheduledAlarm { kj::mv(actor), scheduledTime, kj::mv(task) };
+  return ScheduledAlarm{kj::mv(actor), scheduledTime, kj::mv(task)};
 }
 
 kj::Promise<void> AlarmScheduler::checkTimestamp(kj::Duration delay, kj::Date scheduledTime) {
@@ -185,9 +184,8 @@ kj::Promise<void> AlarmScheduler::checkTimestamp(kj::Duration delay, kj::Date sc
   }
 }
 
-kj::Promise<void> AlarmScheduler::makeAlarmTask(kj::Duration delay,
-                                                const ActorKey& actorRef,
-                                                kj::Date scheduledTime) {
+kj::Promise<void> AlarmScheduler::makeAlarmTask(
+    kj::Duration delay, const ActorKey& actorRef, kj::Date scheduledTime) {
   co_await checkTimestamp(delay, scheduledTime);
   uint32_t retryCount = 0;
   {
@@ -202,15 +200,13 @@ kj::Promise<void> AlarmScheduler::makeAlarmTask(kj::Duration delay,
     } catch (...) {
       auto exception = kj::getCaughtExceptionAsKj();
       KJ_LOG(WARNING, exception);
-      co_return RetryInfo {
-        .retry = true,
+      co_return RetryInfo{.retry = true,
 
         // An exception here is "weird", they should normally
         // be turned into AlarmResult statuses in the sandbox
         // for any user-caused error. Let's not count this
         // retry attempt against the limit.
-        .retryCountsAgainstLimit = false
-      };
+        .retryCountsAgainstLimit = false};
     }
   })();
 

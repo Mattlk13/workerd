@@ -7,20 +7,23 @@
 //
 // Any files declaring an API to export to JavaScript will need to include this header.
 
-#include <kj/string.h>
-#include <kj/function.h>
-#include <kj/exception.h>
-#include <kj/one-of.h>
-#include <kj/debug.h>
-#include <type_traits>
-#include <v8.h>
-#include <v8-profiler.h>
-#include <workerd/jsg/memory.h>
 #include "macro-meta.h"
-#include "wrappable.h"
 #include "util.h"
+#include "wrappable.h"
 
 #include <workerd/jsg/exception.h>
+#include <workerd/jsg/memory.h>
+
+#include <v8-profiler.h>
+#include <v8.h>
+
+#include <kj/debug.h>
+#include <kj/exception.h>
+#include <kj/function.h>
+#include <kj/one-of.h>
+#include <kj/string.h>
+
+#include <type_traits>
 
 using kj::byte;
 using kj::uint;
@@ -30,45 +33,47 @@ typedef long long ssize_t;
 #endif
 
 namespace workerd::jsg {
-  kj::String stringifyHandle(v8::Local<v8::Value> value);
+kj::String stringifyHandle(v8::Local<v8::Value> value);
 }
 
 namespace v8 {
-  // Allows v8 handles to be passed to kj::str() as well as KJ_LOG and related macros.
-  template <typename T, typename = kj::EnableIf<kj::canConvert<T*, v8::Value*>()>>
-  kj::String KJ_STRINGIFY(v8::Local<T> value) {
-    return workerd::jsg::stringifyHandle(value);
-  }
+// Allows v8 handles to be passed to kj::str() as well as KJ_LOG and related macros.
+template <typename T, typename = kj::EnableIf<kj::canConvert<T*, v8::Value*>()>>
+kj::String KJ_STRINGIFY(v8::Local<T> value) {
+  return workerd::jsg::stringifyHandle(value);
 }
+}  // namespace v8
 
 namespace workerd::jsg {
 
 // =======================================================================================
 // Macros for declaring type glue.
 
-#define JSG_RESOURCE_TYPE(Type, ...) \
-  static constexpr ::workerd::jsg::JsgKind JSG_KIND KJ_UNUSED = \
-      ::workerd::jsg::JsgKind::RESOURCE; \
-  using jsgSuper = jsgThis; \
-  using jsgThis = Type; \
-  inline kj::StringPtr jsgGetMemoryName() const override { return #Type##_kjc; } \
-  inline size_t jsgGetMemorySelfSize() const override { return sizeof(Type); } \
-  inline void jsgGetMemoryInfo(jsg::MemoryTracker& tracker) const override { \
-    const Type* self = static_cast<const Type*>(this); \
-    jsgSuper::jsgGetMemoryInfo(tracker); \
-    ::workerd::jsg::visitSubclassForMemoryInfo<Type>(self, tracker); \
-  } \
-  template <typename> \
-  friend constexpr bool ::workerd::jsg::resourceNeedsGcTracing(); \
-  template <typename T> \
-  friend void ::workerd::jsg::visitSubclassForGc( \
-      T* obj, ::workerd::jsg::GcVisitor& visitor); \
-  inline void jsgVisitForGc(::workerd::jsg::GcVisitor& visitor) override { \
-    jsgSuper::jsgVisitForGc(visitor); \
-    ::workerd::jsg::visitSubclassForGc<Type>(this, visitor); \
-  } \
-  static void jsgConfiguration(__VA_ARGS__); \
-  template <typename Registry, typename Self> \
+#define JSG_RESOURCE_TYPE(Type, ...)                                                               \
+  static constexpr ::workerd::jsg::JsgKind JSG_KIND KJ_UNUSED = ::workerd::jsg::JsgKind::RESOURCE; \
+  using jsgSuper = jsgThis;                                                                        \
+  using jsgThis = Type;                                                                            \
+  inline kj::StringPtr jsgGetMemoryName() const override {                                         \
+    return #Type##_kjc;                                                                            \
+  }                                                                                                \
+  inline size_t jsgGetMemorySelfSize() const override {                                            \
+    return sizeof(Type);                                                                           \
+  }                                                                                                \
+  inline void jsgGetMemoryInfo(jsg::MemoryTracker& tracker) const override {                       \
+    const Type* self = static_cast<const Type*>(this);                                             \
+    jsgSuper::jsgGetMemoryInfo(tracker);                                                           \
+    ::workerd::jsg::visitSubclassForMemoryInfo<Type>(self, tracker);                               \
+  }                                                                                                \
+  template <typename>                                                                              \
+  friend constexpr bool ::workerd::jsg::resourceNeedsGcTracing();                                  \
+  template <typename T>                                                                            \
+  friend void ::workerd::jsg::visitSubclassForGc(T* obj, ::workerd::jsg::GcVisitor& visitor);      \
+  inline void jsgVisitForGc(::workerd::jsg::GcVisitor& visitor) override {                         \
+    jsgSuper::jsgVisitForGc(visitor);                                                              \
+    ::workerd::jsg::visitSubclassForGc<Type>(this, visitor);                                       \
+  }                                                                                                \
+  static void jsgConfiguration(__VA_ARGS__);                                                       \
+  template <typename Registry, typename Self>                                                      \
   static void registerMembers(Registry& registry, ##__VA_ARGS__)
 // Begins a block nested inside a C++ class to declare how that class should be accessible in
 // JavaScript. JSG_RESOURCE_TYPE declares that the class is a "resource type" in KJ parlance.
@@ -181,17 +186,17 @@ namespace workerd::jsg {
 
 // Use inside a JSG_RESOURCE_TYPE to declare that the resource type itself can be invoked as
 // a function.
-#define JSG_CALLABLE(name) \
-  do { \
-    registry.template registerCallable<decltype(&Self::name), &Self::name>(); \
+#define JSG_CALLABLE(name)                                                                         \
+  do {                                                                                             \
+    registry.template registerCallable<decltype(&Self::name), &Self::name>();                      \
   } while (false)
 
 // Use inside a JSG_RESOURCE_TYPE block to declare that the given method should be callable from
 // JavaScript on instances of the resource type.
-#define JSG_METHOD(name) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerMethod<NAME, decltype(&Self::name), &Self::name>(); \
+#define JSG_METHOD(name)                                                                           \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerMethod<NAME, decltype(&Self::name), &Self::name>();                  \
   } while (false)
 
 // Like JSG_METHOD but allows you to specify a different name to use in JavaScript. This is
@@ -199,25 +204,25 @@ namespace workerd::jsg {
 // example:
 //
 //     JSG_METHOD_NAMED(delete, delete_);
-#define JSG_METHOD_NAMED(name, method) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerMethod<NAME, decltype(&Self::method), &Self::method>(); \
+#define JSG_METHOD_NAMED(name, method)                                                             \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerMethod<NAME, decltype(&Self::method), &Self::method>();              \
   } while (false)
 
 // Use inside a JSG_RESOURCE_TYPE block to declare that the given method should be callable from
 // JavaScript on the resource type's constructor.
-#define JSG_STATIC_METHOD(name) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerStaticMethod<NAME, decltype(Self::name), &Self::name>(); \
+#define JSG_STATIC_METHOD(name)                                                                    \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerStaticMethod<NAME, decltype(Self::name), &Self::name>();             \
   } while (false)
 
 // Like JSG_METHOD_NAMED, but for static methods.
-#define JSG_STATIC_METHOD_NAMED(name, method) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerStaticMethod<NAME, decltype(Self::method), &Self::method>(); \
+#define JSG_STATIC_METHOD_NAMED(name, method)                                                      \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerStaticMethod<NAME, decltype(Self::method), &Self::method>();         \
   } while (false)
 
 // Use inside a JSG_RESOURCE_TYPE block to make objects of this type iterable. Pass in the name of
@@ -240,30 +245,30 @@ namespace workerd::jsg {
 //
 // To enable the latter case, you would need to use JSG_METHOD(entries), and make Iterator itself
 // iterable.
-#define JSG_ITERABLE(method) \
-  do { \
-    static const char NAME[] = #method; \
-    registry.template registerIterable<NAME, decltype(&Self::method), &Self::method>(); \
+#define JSG_ITERABLE(method)                                                                       \
+  do {                                                                                             \
+    static const char NAME[] = #method;                                                            \
+    registry.template registerIterable<NAME, decltype(&Self::method), &Self::method>();            \
   } while (false)
 
 // Use inside a JSG_RESOURCE_TYPE block to make objects of this type async iterable. Pass in the
 // name of a method returning a kj::Promise for an object satisfying the requirements of a
 // JavaScript iterator.
-#define JSG_ASYNC_ITERABLE(method) \
-  do { \
-    static const char NAME[] = #method; \
-    registry.template registerAsyncIterable<NAME, decltype(&Self::method), &Self::method>(); \
+#define JSG_ASYNC_ITERABLE(method)                                                                 \
+  do {                                                                                             \
+    static const char NAME[] = #method;                                                            \
+    registry.template registerAsyncIterable<NAME, decltype(&Self::method), &Self::method>();       \
   } while (false)
 
-#define JSG_DISPOSE(method) \
-  do { \
-    static const char NAME[] = #method; \
-    registry.template registerDispose<NAME, decltype(&Self::method), &Self::method>(); \
+#define JSG_DISPOSE(method)                                                                        \
+  do {                                                                                             \
+    static const char NAME[] = #method;                                                            \
+    registry.template registerDispose<NAME, decltype(&Self::method), &Self::method>();             \
   } while (false)
-#define JSG_ASYNC_DISPOSE(method) \
-  do { \
-    static const char NAME[] = #method; \
-    registry.template registerAsyncDispose<NAME, decltype(&Self::method), &Self::method>(); \
+#define JSG_ASYNC_DISPOSE(method)                                                                  \
+  do {                                                                                             \
+    static const char NAME[] = #method;                                                            \
+    registry.template registerAsyncDispose<NAME, decltype(&Self::method), &Self::method>();        \
   } while (false)
 
 // Use inside a JSG_RESOURCE_TYPE block to declare a property on this object that should be
@@ -275,11 +280,11 @@ namespace workerd::jsg {
 // construction, which is inefficient and can break some optimizations. For example, any object
 // with an instance property will not be possible to collect during minor GCs, only major GCs.
 // Prototype properties are on the prototype, so have no runtime overhead until they are used.
-#define JSG_INSTANCE_PROPERTY(name, getter, setter) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerInstanceProperty<NAME, decltype(&Self::getter), &Self::getter, \
-        decltype(&Self::setter), &Self::setter>(); \
+#define JSG_INSTANCE_PROPERTY(name, getter, setter)                                                \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerInstanceProperty<NAME, decltype(&Self::getter), &Self::getter,       \
+        decltype(&Self::setter), &Self::setter>();                                                 \
   } while (false)
 
 // Use inside a JSG_RESOURCE_TYPE block to declare a property on this object's prototype that
@@ -329,66 +334,66 @@ namespace workerd::jsg {
 // This means that any resource type that uses JSG_INSTANCE_PROPERTY to attach properties
 // will not be properly subclassable. To allow subclasses to work correctly, use
 // JSG_PROTOTYPE_PROPERTY instead.
-#define JSG_PROTOTYPE_PROPERTY(name, getter, setter) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerPrototypeProperty<NAME, decltype(&Self::getter), &Self::getter, \
-        decltype(&Self::setter), &Self::setter>(); \
+#define JSG_PROTOTYPE_PROPERTY(name, getter, setter)                                               \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerPrototypeProperty<NAME, decltype(&Self::getter), &Self::getter,      \
+        decltype(&Self::setter), &Self::setter>();                                                 \
   } while (false)
 
 // Like JSG_INSTANCE_PROPERTY but creates a property that will throw an exception if
 // JavaScript tries to assign to it.
-#define JSG_READONLY_INSTANCE_PROPERTY(name, getter) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerReadonlyInstanceProperty<NAME, \
-        decltype(&Self::getter), &Self::getter>(); \
+#define JSG_READONLY_INSTANCE_PROPERTY(name, getter)                                               \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerReadonlyInstanceProperty<NAME, decltype(&Self::getter),              \
+        &Self::getter>();                                                                          \
   } while (false)
 
 // Like JSG_PROTOTYPE_PROPERTY but creates a property that will throw an exception if JavaScript
 // tries to assign to it.
-#define JSG_READONLY_PROTOTYPE_PROPERTY(name, getter) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerReadonlyPrototypeProperty< \
-        NAME, decltype(&Self::getter), &Self::getter>(); \
+#define JSG_READONLY_PROTOTYPE_PROPERTY(name, getter)                                              \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerReadonlyPrototypeProperty<NAME, decltype(&Self::getter),             \
+        &Self::getter>();                                                                          \
   } while (false)
 
 // A lazy property will call the getter the first time the property is access but will then
 // replace the property definition with a normal instance property using the returned value.
 // Keep in mind that, as an instance property, these lazily set properties cannot be overridden
 // by subclasses. They are set directly on the instance object itself when it is created.
-#define JSG_LAZY_INSTANCE_PROPERTY(name, getter) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerLazyInstanceProperty< \
-        NAME, decltype(&Self::getter), &Self::getter, false>(); \
+#define JSG_LAZY_INSTANCE_PROPERTY(name, getter)                                                   \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerLazyInstanceProperty<NAME, decltype(&Self::getter), &Self::getter,   \
+        false>();                                                                                  \
   } while (false)
 
-#define JSG_LAZY_READONLY_INSTANCE_PROPERTY(name, getter) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerLazyInstanceProperty< \
-        NAME, decltype(&Self::getter), &Self::getter, true>(); \
+#define JSG_LAZY_READONLY_INSTANCE_PROPERTY(name, getter)                                          \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerLazyInstanceProperty<NAME, decltype(&Self::getter), &Self::getter,   \
+        true>();                                                                                   \
   } while (false)
 
 // A lazy property which value will be supplied by javascript implementation.
 // On first property access given module name is instantiated and its export with a
 // given property name is used for the value.
 // Common use-case is to supply class or function implementations.
-#define JSG_LAZY_JS_INSTANCE_PROPERTY(name, moduleName) \
-  do { \
-    static const char NAME[] = #name; \
-    static const char MODULE_NAME[] = moduleName; \
-    registry.template registerLazyJsInstanceProperty<NAME, MODULE_NAME, false>(); \
+#define JSG_LAZY_JS_INSTANCE_PROPERTY(name, moduleName)                                            \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    static const char MODULE_NAME[] = moduleName;                                                  \
+    registry.template registerLazyJsInstanceProperty<NAME, MODULE_NAME, false>();                  \
   } while (false)
 
 // JSG_LAZY_JS_INSTANCE_PROPERTY variant that does not let the property be changed by user script.
-#define JSG_LAZY_JS_INSTANCE_READONLY_PROPERTY(name, moduleName) \
-  do { \
-    static const char NAME[] = #name; \
-    static const char MODULE_NAME[] = moduleName; \
-    registry.template registerLazyJsInstanceProperty<NAME, MODULE_NAME, true>(); \
+#define JSG_LAZY_JS_INSTANCE_READONLY_PROPERTY(name, moduleName)                                   \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    static const char MODULE_NAME[] = moduleName;                                                  \
+    registry.template registerLazyJsInstanceProperty<NAME, MODULE_NAME, true>();                   \
   } while (false)
 
 // Use inside a JSG_RESOURCE_TYPE block to declare a property that should be shown when calling
@@ -396,11 +401,10 @@ namespace workerd::jsg {
 // `console.log()`ing too, and should be used to expose internal state useful for debugging.
 // `name` is the name of the property (displayed in square brackets), while `getter` is the name of
 // the C++ method that gets this property's value.
-#define JSG_INSPECT_PROPERTY(name, getter) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerInspectProperty< \
-        NAME, decltype(&Self::getter), &Self::getter>(); \
+#define JSG_INSPECT_PROPERTY(name, getter)                                                         \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerInspectProperty<NAME, decltype(&Self::getter), &Self::getter>();     \
   } while (false)
 
 // Use inside a JSG_RESOURCE_TYPE to create a static constant member on the constructor and
@@ -428,10 +432,10 @@ namespace workerd::jsg {
 //   https://heycam.github.io/webidl/#idl-constants
 //
 // TODO(someday): This should probably also support the null JS value.
-#define JSG_STATIC_CONSTANT(name) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerStaticConstant<NAME, decltype(Self::name)>(Self::name); \
+#define JSG_STATIC_CONSTANT(name)                                                                  \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerStaticConstant<NAME, decltype(Self::name)>(Self::name);              \
   } while (false)
 
 // This works the same as JSG_STATIC_CONSTANT but allows us to provide an alias to an arbitrary c++
@@ -442,68 +446,67 @@ namespace workerd::jsg {
 //         JSG_STATIC_CONSTANT_NAMED(FOO_BAR, SOME_SYSTEM_CONSTANT);
 //       }
 //     };
-#define JSG_STATIC_CONSTANT_NAMED(name, constant) \
-  do { \
-    static const char NAME[] = #name; \
-    registry.template registerStaticConstant<NAME, decltype(constant)>(constant); \
+#define JSG_STATIC_CONSTANT_NAMED(name, constant)                                                  \
+  do {                                                                                             \
+    static const char NAME[] = #name;                                                              \
+    registry.template registerStaticConstant<NAME, decltype(constant)>(constant);                  \
   } while (false)
 
 // Use inside a JSG_RESOURCE_TYPE block to declare that this type inherits from another type,
 // which must also have a JSG_RESOURCE_TYPE block. This type must singly, non-virtually inherit
 // from the specified type. (Multiple inheritance and virtual inheritance will not work since we
 // rely on the pointer to the superclass and the subclass having the same numeric value.)
-#define JSG_INHERIT(Type) \
-  static_assert(kj::canConvert<Self&, Type&>(), #Type " is not a superclass of this"); \
+#define JSG_INHERIT(Type)                                                                          \
+  static_assert(kj::canConvert<Self&, Type&>(), #Type " is not a superclass of this");             \
   registry.template registerInherit<Type>()
-
 
 // Use inside a JSG_RESOURCE_TYPE block to declare that this type inherits from an intrinsic
 // prototype. This is primarily useful to inherit from v8::kErrorPrototype, like DOMException, and
 // v8::kIteratorPrototype.
-#define JSG_INHERIT_INTRINSIC(intrinsic) \
-  do { \
-      static const char NAME[] = #intrinsic; \
-      registry.template registerInheritIntrinsic<NAME>(intrinsic); \
+#define JSG_INHERIT_INTRINSIC(intrinsic)                                                           \
+  do {                                                                                             \
+    static const char NAME[] = #intrinsic;                                                         \
+    registry.template registerInheritIntrinsic<NAME>(intrinsic);                                   \
   } while (false)
 
 // An isDetected() operation which detects if the expression t.getTemplate(isolate, &u) is available
 // for instances `t`, `u` of types T and U.
 template <typename T, typename U>
-using HasGetTemplateOverload = decltype(
-    kj::instance<T&>().getTemplate((v8::Isolate*)nullptr, (U*)nullptr));
+using HasGetTemplateOverload =
+    decltype(kj::instance<T&>().getTemplate((v8::Isolate*)nullptr, (U*)nullptr));
 
 // Use inside a JSG_RESOURCE_TYPE block to declare that the given type should be visible as a
 // static member of this type. Typically, your "global" type would use several of these
 // declarations to make other types appear in the global scope. It is not necessary for the types
 // to be nested in C++.
-#define JSG_NESTED_TYPE(Type) \
-  do { \
-    /* Note that `Type` may be incomplete here, we should be OK with that. */ \
-    static const char NAME[] = #Type; \
-    registry.template registerNestedType<Type, NAME>(); \
+#define JSG_NESTED_TYPE(Type)                                                                      \
+  do {                                                                                             \
+    /* Note that `Type` may be incomplete here, we should be OK with that. */                      \
+    static const char NAME[] = #Type;                                                              \
+    registry.template registerNestedType<Type, NAME>();                                            \
   } while (false)
 
-#define JSG_NESTED_TYPE_NAMED(Type, Name) \
-  do { \
-    /* Note that `Type` may be incomplete here, we should be OK with that. */ \
-    static const char NAME[] = #Name; \
-    registry.template registerNestedType<Type, NAME>(); \
+#define JSG_NESTED_TYPE_NAMED(Type, Name)                                                          \
+  do {                                                                                             \
+    /* Note that `Type` may be incomplete here, we should be OK with that. */                      \
+    static const char NAME[] = #Name;                                                              \
+    registry.template registerNestedType<Type, NAME>();                                            \
   } while (false)
 
 // Adds reflection to a resource type. See PropertyReflection<T> for usage.
-#define JSG_REFLECTION(...) \
-  static constexpr bool jsgHasReflection = true; \
-  template <typename TypeWrapper> \
-  void jsgInitReflection(TypeWrapper& wrapper) { \
-    jsgSuper::jsgInitReflection(wrapper); \
-    wrapper.initReflection(this, __VA_ARGS__); \
+#define JSG_REFLECTION(...)                                                                        \
+  static constexpr bool jsgHasReflection = true;                                                   \
+  template <typename TypeWrapper>                                                                  \
+  void jsgInitReflection(TypeWrapper& wrapper) {                                                   \
+    jsgSuper::jsgInitReflection(wrapper);                                                          \
+    wrapper.initReflection(this, __VA_ARGS__);                                                     \
   }
 
 // Declares the type serializable. See jsg::Serializer for usage.
-#define JSG_SERIALIZABLE(TAG, ...) \
-  static_assert(static_cast<uint>(jsgSuper::jsgSerializeTag) != static_cast<uint>(TAG)); \
-  static constexpr auto jsgSerializeTag = TAG; \
-  static constexpr decltype(jsgSerializeTag) jsgSerializeOldTags[] = {__VA_ARGS__}; \
+#define JSG_SERIALIZABLE(TAG, ...)                                                                 \
+  static_assert(static_cast<uint>(jsgSuper::jsgSerializeTag) != static_cast<uint>(TAG));           \
+  static constexpr auto jsgSerializeTag = TAG;                                                     \
+  static constexpr decltype(jsgSerializeTag) jsgSerializeOldTags[] = {__VA_ARGS__};                \
   static constexpr auto jsgSerializeOneway = false
 
 // Like JSG_SERIALIZABLE(), but the type has only a serialize() method and no deserialize(). It
@@ -511,10 +514,10 @@ using HasGetTemplateOverload = decltype(
 // round trip will have the effect of replacing this type with that other type.
 //
 // Used e.g. for JsRpcTarget, which becomes JsRpcStub after serialization.
-#define JSG_ONEWAY_SERIALIZABLE(TAG) \
-  static_assert(static_cast<uint>(jsgSuper::jsgSerializeTag) != static_cast<uint>(TAG)); \
-  static constexpr auto jsgSerializeTag = TAG; \
-  static constexpr decltype(jsgSerializeTag) jsgSerializeOldTags[] = {}; \
+#define JSG_ONEWAY_SERIALIZABLE(TAG)                                                               \
+  static_assert(static_cast<uint>(jsgSuper::jsgSerializeTag) != static_cast<uint>(TAG));           \
+  static constexpr auto jsgSerializeTag = TAG;                                                     \
+  static constexpr decltype(jsgSerializeTag) jsgSerializeOldTags[] = {};                           \
   static constexpr auto jsgSerializeOneway = true
 
 // Declares a wildcart property getter. If a property is requested that isn't already present on
@@ -537,9 +540,9 @@ using HasGetTemplateOverload = decltype(
 //       JSG_WILDCARD_PROPERTY(getWildcard);
 //     }
 //   };
-#define JSG_WILDCARD_PROPERTY(method) \
-  do { \
-   registry.template registerWildcardProperty<Self, decltype(&Self::method), &Self::method>(); \
+#define JSG_WILDCARD_PROPERTY(method)                                                              \
+  do {                                                                                             \
+    registry.template registerWildcardProperty<Self, decltype(&Self::method), &Self::method>();    \
   } while (false)
 
 // Use inside a JSG_RESOURCE_TYPE block to declare that this type should be considered a "root" for
@@ -547,81 +550,91 @@ using HasGetTemplateOverload = decltype(
 // recursively referenced types (e.g. method parameter/return types, property types, inherits, etc)
 // will be included in the generated TypeScript. See the `## TypeScript` section of the JSG README.md
 // for more details.
-#define JSG_TS_ROOT() \
-  registry.registerTypeScriptRoot()
+#define JSG_TS_ROOT() registry.registerTypeScriptRoot()
 
 // Use inside a JSG_RESOURCE_TYPE block to customise the generated TypeScript definition for this type.
 // This macro accepts a single override parameter containing a partial TypeScript statement definition.
 // Varargs are accepted so that overrides can contain `,` outside of balanced brackets. See the
 // `## TypeScript` section of the JSG README.md for many more details and examples.
-#define JSG_TS_OVERRIDE(...) \
- do { \
-  static const char OVERRIDE[] = JSG_STRING_LITERAL(__VA_ARGS__); \
-  registry.template registerTypeScriptOverride<OVERRIDE>(); \
- } while (false)
+#define JSG_TS_OVERRIDE(...)                                                                       \
+  do {                                                                                             \
+    static const char OVERRIDE[] = JSG_STRING_LITERAL(__VA_ARGS__);                                \
+    registry.template registerTypeScriptOverride<OVERRIDE>();                                      \
+  } while (false)
 
 // Use inside a JSG_RESOURCE_TYPE block to insert additional TypeScript definitions next to the generated
 // TypeScript definition for this type. This macro accepts a single define parameter containing one or
 // more TypeScript definitions (e.g. interfaces, classes, type aliases, consts, ...). Varargs are accepted
 // so that defines can contain `,` outside of balanced brackets. See the `## TypeScript`section of the JSG
 // README.md for more details.
-#define JSG_TS_DEFINE(...) \
- do { \
-  static const char DEFINE[] = JSG_STRING_LITERAL(__VA_ARGS__); \
-  registry.template registerTypeScriptDefine<DEFINE>(); \
- } while (false)
+#define JSG_TS_DEFINE(...)                                                                         \
+  do {                                                                                             \
+    static const char DEFINE[] = JSG_STRING_LITERAL(__VA_ARGS__);                                  \
+    registry.template registerTypeScriptDefine<DEFINE>();                                          \
+  } while (false)
 
 // Like JSG_TS_ROOT but for use with JSG_STRUCT. Should be placed adjacent to the JSG_STRUCT declaration,
 // inside the same `struct` definition. See the `## TypeScript` section of the JSG README.md for more
 // details.
-#define JSG_STRUCT_TS_ROOT() \
-  static constexpr bool _JSG_STRUCT_TS_ROOT_DO_NOT_USE_DIRECTLY = true
+#define JSG_STRUCT_TS_ROOT() static constexpr bool _JSG_STRUCT_TS_ROOT_DO_NOT_USE_DIRECTLY = true
 
 // Like JSG_TS_OVERRIDE but for use with JSG_STRUCT. Should be placed adjacent to the JSG_STRUCT
 // declaration, inside the same `struct` definition. See the `## TypeScript` section of the JSG README.md
 // for many more details and examples.
-#define JSG_STRUCT_TS_OVERRIDE(...) \
-  static constexpr char _JSG_STRUCT_TS_OVERRIDE_DO_NOT_USE_DIRECTLY[] = JSG_STRING_LITERAL(__VA_ARGS__)
+#define JSG_STRUCT_TS_OVERRIDE(...)                                                                \
+  static constexpr char _JSG_STRUCT_TS_OVERRIDE_DO_NOT_USE_DIRECTLY[] =                            \
+      JSG_STRING_LITERAL(__VA_ARGS__)
+
+// Like JSG_STRUCT_TS_OVERRIDE, however it enables dynamic selection of TS_OVERRIDE.
+// Should be placed adjacent to the JSG_STRUCT delcaration, inside the same struct definition.
+#define JSG_STRUCT_TS_OVERRIDE_DYNAMIC(...)                                                        \
+  static void jsgConfiguration(__VA_ARGS__);                                                       \
+  template <typename Registry>                                                                     \
+  static void registerTypeScriptDynamicOverride(Registry& registry, ##__VA_ARGS__)
 
 // Like JSG_TS_DEFINE but for use with JSG_STRUCT. Should be placed adjacent to the JSG_STRUCT
 // declaration, inside the same `struct` definition. See the `## TypeScript`section of the JSG README.md
 // for more details.
-#define JSG_STRUCT_TS_DEFINE(...) \
-  static constexpr char _JSG_STRUCT_TS_DEFINE_DO_NOT_USE_DIRECTLY[] = JSG_STRING_LITERAL(__VA_ARGS__)
+#define JSG_STRUCT_TS_DEFINE(...)                                                                  \
+  static constexpr char _JSG_STRUCT_TS_DEFINE_DO_NOT_USE_DIRECTLY[] =                              \
+      JSG_STRING_LITERAL(__VA_ARGS__)
 
 // Adds a group of javascript modules to the module registry when context is instantiated.
 // bundle is of a Bundle type from workerd/jsg/modules.capnp.
 // Modules will be resolved according to their type and module registry normal resolve rules.
-#define JSG_CONTEXT_JS_BUNDLE(bundle) \
-  do { \
-    registry.registerJsBundle(bundle); \
+#define JSG_CONTEXT_JS_BUNDLE(bundle)                                                              \
+  do {                                                                                             \
+    registry.registerJsBundle(bundle);                                                             \
   } while (false)
 
 namespace {
-  // true when the T has _JSG_STRUCT_TS_ROOT_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_ROOT
-  template <typename T, typename = int>
-  struct HasStructTypeScriptRoot : std::false_type {};
+// true when the T has _JSG_STRUCT_TS_ROOT_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_ROOT
+template <typename T, typename = int>
+struct HasStructTypeScriptRoot: std::false_type {};
 
-  // true when the T has _JSG_STRUCT_TS_ROOT_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_ROOT
-  template <typename T>
-  struct HasStructTypeScriptRoot<T, decltype(T::_JSG_STRUCT_TS_ROOT_DO_NOT_USE_DIRECTLY, 0)> : std::true_type { };
+// true when the T has _JSG_STRUCT_TS_ROOT_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_ROOT
+template <typename T>
+struct HasStructTypeScriptRoot<T, decltype(T::_JSG_STRUCT_TS_ROOT_DO_NOT_USE_DIRECTLY, 0)>
+    : std::true_type {};
 
-  // true when the T has _JSG_STRUCT_TS_OVERRIDE_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_OVERRIDE
-  template <typename T, typename = int>
-  struct HasStructTypeScriptOverride : std::false_type {};
+// true when the T has _JSG_STRUCT_TS_OVERRIDE_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_OVERRIDE
+template <typename T, typename = int>
+struct HasStructTypeScriptOverride: std::false_type {};
 
-  // true when the T has _JSG_STRUCT_TS_OVERRIDE_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_OVERRIDE
-  template <typename T>
-  struct HasStructTypeScriptOverride<T, decltype(T::_JSG_STRUCT_TS_OVERRIDE_DO_NOT_USE_DIRECTLY, 0)> : std::true_type { };
+// true when the T has _JSG_STRUCT_TS_OVERRIDE_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_OVERRIDE
+template <typename T>
+struct HasStructTypeScriptOverride<T, decltype(T::_JSG_STRUCT_TS_OVERRIDE_DO_NOT_USE_DIRECTLY, 0)>
+    : std::true_type {};
 
-  // true when the T has _JSG_STRUCT_TS_DEFINE_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_DEFINE
-  template <typename T, typename = int>
-  struct HasStructTypeScriptDefine : std::false_type {};
+// true when the T has _JSG_STRUCT_TS_DEFINE_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_DEFINE
+template <typename T, typename = int>
+struct HasStructTypeScriptDefine: std::false_type {};
 
-  // true when the T has _JSG_STRUCT_TS_DEFINE_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_DEFINE
-  template <typename T>
-  struct HasStructTypeScriptDefine<T, decltype(T::_JSG_STRUCT_TS_DEFINE_DO_NOT_USE_DIRECTLY, 0)> : std::true_type { };
-}
+// true when the T has _JSG_STRUCT_TS_DEFINE_DO_NOT_USE_DIRECTLY field generated by JSG_STRUCT_TS_DEFINE
+template <typename T>
+struct HasStructTypeScriptDefine<T, decltype(T::_JSG_STRUCT_TS_DEFINE_DO_NOT_USE_DIRECTLY, 0)>
+    : std::true_type {};
+}  // namespace
 
 // Nest this inside a simple struct declaration in order to support translating it to/from a
 // JavaScript object / Web IDL dictionary.
@@ -641,6 +654,20 @@ namespace {
 // all in JavaScript when the optional is null in C++ (as opposed to the field being present but
 // assigned the value `undefined`).
 //
+// Note that if a `validate` function is provided, then it will be called after the struct is
+// unwrapped from v8. This would be an appropriate time to throw an error.
+// Signature: void validate(jsg::Lock& js);
+// Example:
+// struct ValidatingFoo {
+//  kj::String abc;
+//  void validate(jsg::Lock& js) {
+//    JSG_REQUIRE(abc.size() != 0, TypeError, "Field 'abc' had no length in 'ValidatingFoo'.");
+//  }
+//  JSG_STRUCT(abc);
+// };
+//
+// In this example the validate method would throw a `TypeError` if the size of the `abc` field was zero.
+//
 // Fields with a starting '$' will have that dollar sign prefix stripped in the JS binding. A
 // motivating example to enact that change was WebCrypto which has a field in a dictionary called
 // "public". '$' was chosen as a token we can use because it's a character for a C++ identifier. If
@@ -648,34 +675,50 @@ namespace {
 // identifiers starting with $ are rare in JS land, especially for things the runtime would be
 // exporting), then you should be able to use '$$' as the identifier prefix in C++ since only the
 // first '$' gets stripped.
-#define JSG_STRUCT(...) \
-  static constexpr ::workerd::jsg::JsgKind JSG_KIND KJ_UNUSED = \
-      ::workerd::jsg::JsgKind::STRUCT; \
-  static constexpr char JSG_FOR_EACH(JSG_STRUCT_FIELD_NAME, , __VA_ARGS__); \
-  template <typename Registry, typename Self> \
-  static void registerMembers(Registry& registry) { \
-    JSG_FOR_EACH(JSG_STRUCT_REGISTER_MEMBER, , __VA_ARGS__); \
-    if constexpr (::workerd::jsg::HasStructTypeScriptRoot<Self>::value) { \
-      registry.registerTypeScriptRoot(); \
-    } \
-    if constexpr (::workerd::jsg::HasStructTypeScriptOverride<Self>::value) { \
-      registry.template registerTypeScriptOverride<Self::_JSG_STRUCT_TS_OVERRIDE_DO_NOT_USE_DIRECTLY>(); \
-    } \
-    if constexpr (::workerd::jsg::HasStructTypeScriptDefine<Self>::value) { \
-      registry.template registerTypeScriptDefine<Self::_JSG_STRUCT_TS_DEFINE_DO_NOT_USE_DIRECTLY>(); \
-    } \
-  } \
-  template <typename TypeWrapper, typename Self> \
-  using JsgFieldWrappers = ::workerd::jsg::TypeTuple< \
-    JSG_FOR_EACH(JSG_STRUCT_FIELD, , __VA_ARGS__) \
-  >
+#define JSG_STRUCT(...)                                                                            \
+  static constexpr ::workerd::jsg::JsgKind JSG_KIND KJ_UNUSED = ::workerd::jsg::JsgKind::STRUCT;   \
+  static constexpr char JSG_FOR_EACH(JSG_STRUCT_FIELD_NAME, , __VA_ARGS__);                        \
+  template <typename TypeWrapper, typename Self>                                                   \
+  using JsgFieldWrappers =                                                                         \
+      ::workerd::jsg::TypeTuple<JSG_FOR_EACH(JSG_STRUCT_FIELD, , __VA_ARGS__)>;                    \
+  template <typename Registry, typename Self, typename Config>                                     \
+  static void registerMembersInternal(Registry& registry, Config arg) {                            \
+    JSG_FOR_EACH(JSG_STRUCT_REGISTER_MEMBER, , __VA_ARGS__);                                       \
+    if constexpr (::workerd::jsg::HasStructTypeScriptRoot<Self>::value) {                          \
+      registry.registerTypeScriptRoot();                                                           \
+    }                                                                                              \
+    if constexpr (requires(jsg::GetConfiguration<Self> arg) {                                      \
+                    registerTypeScriptDynamicOverride<Registry>(registry, arg);                    \
+                  }) {                                                                             \
+      registerTypeScriptDynamicOverride<Registry>(registry, arg);                                  \
+    } else if constexpr (::workerd::jsg::HasStructTypeScriptOverride<Self>::value) {               \
+      registry.template registerTypeScriptOverride<                                                \
+          Self::_JSG_STRUCT_TS_OVERRIDE_DO_NOT_USE_DIRECTLY>();                                    \
+    }                                                                                              \
+    if constexpr (::workerd::jsg::HasStructTypeScriptDefine<Self>::value) {                        \
+      registry                                                                                     \
+          .template registerTypeScriptDefine<Self::_JSG_STRUCT_TS_DEFINE_DO_NOT_USE_DIRECTLY>();   \
+    }                                                                                              \
+  }                                                                                                \
+  template <typename Registry, typename Self>                                                      \
+  static void registerMembers(Registry& registry)                                                  \
+    requires(!jsg::HasConfiguration<Self>)                                                         \
+  {                                                                                                \
+    registerMembersInternal<Registry, Self, void*>(registry, nullptr);                             \
+  }                                                                                                \
+  template <typename Registry, typename Self>                                                      \
+  static void registerMembers(Registry& registry, jsg::GetConfiguration<Self> arg)                 \
+    requires jsg::HasConfiguration<Self>                                                           \
+  {                                                                                                \
+    registerMembersInternal<Registry, Self, jsg::GetConfiguration<Self>>(registry, arg);           \
+  }
 
 namespace {
 template <size_t N>
 consteval size_t prefixLengthToStrip(const char (&s)[N]) {
   return s[0] == '$' ? 1 : 0;
 }
-}
+}  // namespace
 
 // This string may not be what's actually exported to v8. For example, if it starts with a `$`, then
 // this value will still contain the `$` even though the `FieldWrapper` template argument will have
@@ -683,13 +726,31 @@ consteval size_t prefixLengthToStrip(const char (&s)[N]) {
 #define JSG_STRUCT_FIELD_NAME(_, name) name##_JSG_NAME_DO_NOT_USE_DIRECTLY[] = #name
 
 // (Internal implementation details for JSG_STRUCT.)
-#define JSG_STRUCT_FIELD(_, name) ::workerd::jsg::FieldWrapper< \
-  TypeWrapper, Self, decltype(::kj::instance<Self>().name), &Self::name, \
-  name##_JSG_NAME_DO_NOT_USE_DIRECTLY, ::workerd::jsg::prefixLengthToStrip(#name)>
+#define JSG_STRUCT_FIELD(_, name)                                                                  \
+  ::workerd::jsg::FieldWrapper<TypeWrapper, Self, decltype(::kj::instance<Self>().name),           \
+      &Self::name, name##_JSG_NAME_DO_NOT_USE_DIRECTLY,                                            \
+      ::workerd::jsg::prefixLengthToStrip(#name)>
 // (Internal implementation details for JSG_STRUCT.)
-#define JSG_STRUCT_REGISTER_MEMBER(_, name) registry.template registerStructProperty< \
-  name##_JSG_NAME_DO_NOT_USE_DIRECTLY, \
-  decltype(::kj::instance<Self>().name), &Self::name>()
+#define JSG_STRUCT_REGISTER_MEMBER(_, name)                                                        \
+  registry.template registerStructProperty<name##_JSG_NAME_DO_NOT_USE_DIRECTLY,                    \
+      decltype(::kj::instance<Self>().name), &Self::name>()
+
+// Indexes for adding API data to V8's Isolate object.
+enum SetDataIndex {
+  // The jsg::IsolateBase for a particular V8 isolate.
+  SET_DATA_ISOLATE_BASE,
+  // The TypeWrapper object for a particular V8 isolate.
+  SET_DATA_TYPE_WRAPPER,
+  // The lock associated with the V8 isolate.
+  SET_DATA_LOCK,
+  // The Worker::Isolate associated with the V8 isolate.
+  SET_DATA_ISOLATE,
+  // The address of the base of the 4Gbyte compressed pointer area.
+  // If we are using the sandbox it's also the base of the sandbox.
+  SET_DATA_CAGE_BASE,
+  // The number of slots workerd uses in the API data for Isolate objects.
+  SET_DATA_SLOTS_IN_USE,
+};
 
 // =======================================================================================
 // Special types
@@ -716,7 +777,7 @@ class Lock;
 // visitation for them. Moving jsg::Data which are reachable via GC visitation is undefined
 // behavior outside of an isolate lock.
 class Data {
-public:
+ public:
   Data(decltype(nullptr)) {}
   ~Data() noexcept(false) {
     destroy();
@@ -746,15 +807,20 @@ public:
   KJ_DISALLOW_COPY(Data);
 
   Data(v8::Isolate* isolate, v8::Local<v8::Data> handle)
-      : isolate(isolate), handle(isolate, handle) {}
+      : isolate(isolate),
+        handle(isolate, handle) {}
 
   // Get the raw underlying v8 handle.
-  v8::Local<v8::Data> getHandle(v8::Isolate* isolate) { return handle.Get(isolate); }
+  v8::Local<v8::Data> getHandle(v8::Isolate* isolate) const {
+    return handle.Get(isolate);
+  }
 
-// Get the raw underlying v8 handle.
-  v8::Local<v8::Data> getHandle(Lock& js);
+  // Get the raw underlying v8 handle.
+  v8::Local<v8::Data> getHandle(Lock& js) const;
 
-  Data addRef(v8::Isolate* isolate) { return Data(isolate, getHandle(isolate)); }
+  Data addRef(v8::Isolate* isolate) {
+    return Data(isolate, getHandle(isolate));
+  }
   Data addRef(Lock& js);
 
   inline bool operator==(const Data& other) const {
@@ -764,7 +830,7 @@ public:
     return handle == other;
   }
 
-private:
+ private:
   // The isolate with which the handles below are associated.
   v8::Isolate* isolate = nullptr;
 
@@ -806,7 +872,7 @@ private:
 // jsg::V8Ref<T> when you need the type-safety of holding a handle to a specific V8 type.
 template <typename T>
 class V8Ref: private Data {
-public:
+ public:
   V8Ref(decltype(nullptr)): Data(nullptr) {}
   V8Ref(v8::Isolate* isolate, v8::Local<T> handle): Data(isolate, handle) {}
   V8Ref(V8Ref&& other): Data(kj::mv(other)) {}
@@ -816,7 +882,7 @@ public:
   }
   KJ_DISALLOW_COPY(V8Ref);
 
-  v8::Local<T> getHandle(v8::Isolate* isolate) {
+  v8::Local<T> getHandle(v8::Isolate* isolate) const {
     if constexpr (std::is_base_of<v8::Value, T>()) {
       // V8 doesn't let us cast directly from v8::Data to subtypes of v8::Value, so we're forced to
       // use this double cast... Ech.
@@ -825,9 +891,11 @@ public:
       return Data::getHandle(isolate).template As<T>();
     }
   }
-  v8::Local<T> getHandle(jsg::Lock& js);
+  v8::Local<T> getHandle(jsg::Lock& js) const;
 
-  V8Ref addRef(v8::Isolate* isolate) { return V8Ref(isolate, getHandle(isolate)); }
+  V8Ref addRef(v8::Isolate* isolate) {
+    return V8Ref(isolate, getHandle(isolate));
+  }
   V8Ref addRef(jsg::Lock& js);
 
   V8Ref deepClone(jsg::Lock& js);
@@ -842,7 +910,7 @@ public:
   template <typename U>
   V8Ref<U> cast(jsg::Lock& js);
 
-private:
+ private:
   friend class GcVisitor;
   friend class MemoryTracker;
 };
@@ -854,7 +922,7 @@ using Value = V8Ref<v8::Value>;
 // T must v8::Object or a subclass (or anything that implements GetIdentityHash()).
 template <typename T>
 class HashableV8Ref: public V8Ref<T> {
-public:
+ public:
   HashableV8Ref(decltype(nullptr)): V8Ref<T>(nullptr), identityHash(0) {}
   HashableV8Ref(v8::Isolate* isolate, v8::Local<T> handle)
       // TODO(perf): It's not clear if V8's `GetIdentityHash()` is intended to return uniform
@@ -862,7 +930,8 @@ public:
       //   it. This may be unnecessary. Note that there are several other call sites of
       //   `GetIdentityHash()` which do the same -- if we decide we don't need this we should fix
       //   all of them.
-      : V8Ref<T>(isolate, handle), identityHash(kj::hashCode(handle->GetIdentityHash())) {}
+      : V8Ref<T>(isolate, handle),
+        identityHash(kj::hashCode(handle->GetIdentityHash())) {}
   HashableV8Ref(HashableV8Ref&& other) = default;
   HashableV8Ref& operator=(HashableV8Ref&& other) = default;
   KJ_DISALLOW_COPY(HashableV8Ref);
@@ -872,23 +941,23 @@ public:
   }
   HashableV8Ref addRef(jsg::Lock& js);
 
-  int hashCode() const { return identityHash; }
+  int hashCode() const {
+    return identityHash;
+  }
 
-private:
+ private:
   int identityHash;
 
   HashableV8Ref(v8::Isolate* isolate, v8::Local<T> handle, int identityHash)
-      : V8Ref<T>(isolate, handle), identityHash(identityHash) {}
+      : V8Ref<T>(isolate, handle),
+        identityHash(identityHash) {}
 };
 
 template <V8Value T>
 void MemoryTracker::trackField(
-    kj::StringPtr edgeName,
-    const V8Ref<T>& value,
-    kj::Maybe<kj::StringPtr> nodeName) {
+    kj::StringPtr edgeName, const V8Ref<T>& value, kj::Maybe<kj::StringPtr> nodeName) {
   // Even though we're passing in a template T, casting to a v8::Value is sufficient here.
-  trackField(edgeName, value.handle.Get(isolate_)
-      .template As<v8::Value>(), nodeName);
+  trackField(edgeName, value.handle.Get(isolate_).template As<v8::Value>(), nodeName);
 }
 
 // A value of type T, or `undefined`.
@@ -923,7 +992,7 @@ void MemoryTracker::trackField(
 //     void foo(Optional<Data> data);
 template <typename T>
 class Optional: public kj::Maybe<T> {
-public:
+ public:
   // Inheriting constructors does not inherit copy/move constructors, so we declare a forwarding
   // constructor instead.
   template <typename... Params>
@@ -934,7 +1003,7 @@ public:
 //  error, it just results in an unset LenientOptional.
 template <typename T>
 class LenientOptional: public kj::Maybe<T> {
-public:
+ public:
   // Inheriting constructors does not inherit copy/move constructors, so we declare a forwarding
   // constructor instead.
   template <typename... Params>
@@ -948,7 +1017,7 @@ public:
 // Another option is to use jsg::Identified<MyStruct>, but sometimes storing the reference
 // into a field of the unwrapped struct is more convenient.
 class SelfRef: public V8Ref<v8::Object> {
-public:
+ public:
   using V8Ref::V8Ref;
 };
 
@@ -960,7 +1029,7 @@ public:
 //
 //   Move this class to the `api` directory and rename to HeaderString.
 class ByteString: public kj::String {
-public:
+ public:
   // Inheriting constructors does not inherit copy/move constructors, so we declare a forwarding
   // constructor instead.
   template <typename... Params>
@@ -1002,39 +1071,50 @@ struct Dict {
   kj::Array<Field> fields;
 
   JSG_MEMORY_INFO(Dict) {
-    for (const auto& field : fields) {
+    for (const auto& field: fields) {
       tracker.trackField(nullptr, field);
     }
   }
 };
 
-template <typename T> class TypeHandler;
+template <typename T>
+class TypeHandler;
 
 // When used as a function argument type, captures all remaining arguments passed to the method,
 // unwrapping them all as type T.
 template <typename T>
 class Arguments: public kj::Array<T> {
-public:
+ public:
   Arguments(kj::Array<T>&& value): kj::Array<T>(kj::mv(value)) {}
 
   using ElementType = T;
 };
 
 // Is `T` some specialization of `Arguments<U>`?
-template <typename T> struct IsArguments_ { static constexpr bool value = false; };
-
-// Is `T` some specialization of `Arguments<U>`?
-template <typename T> struct IsArguments_<Arguments<T>> { static constexpr bool value = true; };
+template <typename T>
+struct IsArguments_ {
+  static constexpr bool value = false;
+};
 
 // Is `T` some specialization of `Arguments<U>`?
 template <typename T>
-constexpr bool isArguments() { return IsArguments_<T>::value; }
+struct IsArguments_<Arguments<T>> {
+  static constexpr bool value = true;
+};
+
+// Is `T` some specialization of `Arguments<U>`?
+template <typename T>
+constexpr bool isArguments() {
+  return IsArguments_<T>::value;
+}
 
 // An array of local values placed on the end of a parameter list to capture all trailing values
 class Varargs {
   // TODO(cleanup): Can all use cases of this be replaced with Arguments<Value>?
-public:
-  Varargs(size_t index, const v8::FunctionCallbackInfo<v8::Value>& args): startIndex(index), args(args) {
+ public:
+  Varargs(size_t index, const v8::FunctionCallbackInfo<v8::Value>& args)
+      : startIndex(index),
+        args(args) {
     if (index > args.Length()) {
       this->length = 0;
     } else {
@@ -1044,7 +1124,9 @@ public:
   Varargs(Varargs&&) = default;
   KJ_DISALLOW_COPY(Varargs);
 
-  size_t size() { return length; }
+  size_t size() {
+    return length;
+  }
 
   Value operator[](size_t index) {
     return Value(args.GetIsolate(), args[startIndex + index]);
@@ -1052,25 +1134,42 @@ public:
 
   class Iterator {
     // TODO(cleanup): This is similar to capnp::_::IndexingIterator. Maybe a common utility class should be added to KJ.
-  public:
-    inline Iterator(size_t index, const v8::FunctionCallbackInfo<v8::Value>& args): index(index), args(args) {}
+   public:
+    inline Iterator(size_t index, const v8::FunctionCallbackInfo<v8::Value>& args)
+        : index(index),
+          args(args) {}
 
-    inline Value     operator* () const { return Value(args.GetIsolate(), args[index]); }
-    inline Iterator& operator++() { ++index; return *this; }
-    inline Iterator  operator++(int) { return Iterator(index++, args); }
-    inline ptrdiff_t operator- (const Iterator& other) const { return index - other.index; }
+    inline Value operator*() const {
+      return Value(args.GetIsolate(), args[index]);
+    }
+    inline Iterator& operator++() {
+      ++index;
+      return *this;
+    }
+    inline Iterator operator++(int) {
+      return Iterator(index++, args);
+    }
+    inline ptrdiff_t operator-(const Iterator& other) const {
+      return index - other.index;
+    }
 
-    inline bool operator==(const Iterator& other) const { return index == other.index && &args == &other.args; }
+    inline bool operator==(const Iterator& other) const {
+      return index == other.index && &args == &other.args;
+    }
 
-  private:
+   private:
     size_t index;
     const v8::FunctionCallbackInfo<v8::Value>& args;
   };
 
-  Iterator begin() { return Iterator(startIndex, args); }
-  Iterator end() { return Iterator(startIndex + length, args); };
+  Iterator begin() {
+    return Iterator(startIndex, args);
+  }
+  Iterator end() {
+    return Iterator(startIndex + length, args);
+  };
 
-private:
+ private:
   size_t startIndex;
   size_t length;
   const v8::FunctionCallbackInfo<v8::Value>& args;
@@ -1083,7 +1182,7 @@ void visitSubclassForGc(T* obj, GcVisitor& visitor);
 
 // All resource types must inherit from this.
 class Object: private Wrappable {
-public:
+ public:
   using jsgThis = Object;
 
   // Objects that extend from jsg::Object should never be copied or moved
@@ -1099,8 +1198,12 @@ public:
 
   // Subclasses should override these to provide appropriate information for
   // the heap snapshot process.
-  inline kj::StringPtr jsgGetMemoryName() const override { return "Object"; }
-  inline size_t jsgGetMemorySelfSize() const override { return sizeof(Object); }
+  inline kj::StringPtr jsgGetMemoryName() const override {
+    return "Object";
+  }
+  inline size_t jsgGetMemorySelfSize() const override {
+    return sizeof(Object);
+  }
   inline void jsgGetMemoryInfo(MemoryTracker& tracker) const override {
     Wrappable::jsgGetMemoryInfo(tracker);
   }
@@ -1119,7 +1222,7 @@ public:
   // own tag.
   static constexpr uint jsgSerializeTag = kj::maxValue;
 
-private:
+ private:
   inline void visitForMemoryInfo(MemoryTracker& tracker) const {}
   inline void visitForGc(GcVisitor& visitor) {}
   template <typename>
@@ -1168,7 +1271,7 @@ private:
 // behavior outside of an isolate lock.
 template <typename T>
 class Ref {
-public:
+ public:
   Ref(decltype(nullptr)): strong(false) {}
   Ref(Ref&& other): inner(kj::mv(other.inner)), strong(true) {
     if (other.strong) {
@@ -1186,7 +1289,8 @@ public:
     inner->addStrongRef();
   }
   template <typename U, typename = kj::EnableIf<kj::canConvert<U&, T&>()>>
-  Ref(Ref<U>&& other): inner(kj::mv(other.inner)), strong(true) {
+  Ref(Ref<U>&& other): inner(kj::mv(other.inner)),
+                       strong(true) {
     if (other.strong) {
       other.strong = false;
     } else {
@@ -1210,13 +1314,25 @@ public:
   }
   KJ_DISALLOW_COPY(Ref);
 
-  T& operator*() { return *inner; }
-  T* operator->() { return inner.get(); }
-  T* get() { return inner.get(); }
+  T& operator*() {
+    return *inner;
+  }
+  T* operator->() {
+    return inner.get();
+  }
+  T* get() {
+    return inner.get();
+  }
 
-  const T& operator*() const { return *inner; }
-  const T* operator->() const { return inner.get(); }
-  const T* get() const { return inner.get(); }
+  const T& operator*() const {
+    return *inner;
+  }
+  const T* operator->() const {
+    return inner.get();
+  }
+  const T* get() const {
+    return inner.get();
+  }
 
   Ref addRef() & {
     return Ref(kj::addRef(*inner));
@@ -1243,7 +1359,7 @@ public:
     inner->Wrappable::attachWrapper(isolate, object, resourceNeedsGcTracing<T>());
   }
 
-private:
+ private:
   kj::Own<T> inner;
 
   // If this has ever been traced, the parent object from which the trace originated. This is kept
@@ -1277,9 +1393,7 @@ private:
 
 template <MemoryRetainer T>
 void MemoryTracker::trackField(
-    kj::StringPtr edgeName,
-    const Ref<T>& value,
-    kj::Maybe<kj::StringPtr> nodeName) {
+    kj::StringPtr edgeName, const Ref<T>& value, kj::Maybe<kj::StringPtr> nodeName) {
   trackField(edgeName, value.get(), nodeName);
 }
 
@@ -1305,7 +1419,7 @@ Ref<T> _jsgThis(T* obj) {
 // JavaScript, including types that are otherwise pass-by-value.
 template <typename T>
 class MemoizedIdentity {
-public:
+ public:
   inline MemoizedIdentity(T value): value(kj::mv(value)) {}
 
   inline MemoizedIdentity& operator=(T value) {
@@ -1330,7 +1444,7 @@ public:
     }
   }
 
-private:
+ private:
   kj::OneOf<T, Value> value;
 
   template <typename TypeWrapper>
@@ -1367,7 +1481,7 @@ struct Identified {
 //
 // Name implements hashCode() so it is suitable for use as a key in kj::HashMap, etc.
 class Name final {
-public:
+ public:
   explicit Name(kj::String string);
   explicit Name(kj::StringPtr string);
   explicit Name(Lock& js, v8::Local<v8::Symbol> symbol);
@@ -1375,7 +1489,9 @@ public:
   Name(Name&&) = default;
   Name& operator=(Name&&) = default;
 
-  inline int hashCode() const { return hash; }
+  inline int hashCode() const {
+    return hash;
+  }
 
   Name clone(jsg::Lock& js);
 
@@ -1392,7 +1508,7 @@ public:
     }
   }
 
-private:
+ private:
   int hash;
   kj::OneOf<kj::String, V8Ref<v8::Symbol>> inner;
 
@@ -1514,22 +1630,38 @@ template <typename T>
 struct PromiseResolverPair;
 
 // Convenience template to detect a `jsg::Promise` type.
-template <typename T> struct IsPromise_ { static constexpr bool value = false; };
+template <typename T>
+struct IsPromise_ {
+  static constexpr bool value = false;
+};
 
 // Convenience template to detect a `jsg::Promise` type.
-template <typename T> struct IsPromise_<Promise<T>> { static constexpr bool value = true; };
+template <typename T>
+struct IsPromise_<Promise<T>> {
+  static constexpr bool value = true;
+};
 
 // Convenience template to detect a `jsg::Promise` type.
-template <typename T> constexpr bool isPromise() { return IsPromise_<T>::value; }
+template <typename T>
+constexpr bool isPromise() {
+  return IsPromise_<T>::value;
+}
 
 // Convenience template to strip off `jsg::Promise`.
-template <typename T> struct RemovePromise_ { typedef T Type; };
+template <typename T>
+struct RemovePromise_ {
+  typedef T Type;
+};
 
 // Convenience template to strip off `jsg::Promise`.
-template <typename T> struct RemovePromise_<Promise<T>> { typedef T Type; };
+template <typename T>
+struct RemovePromise_<Promise<T>> {
+  typedef T Type;
+};
 
 // Convenience template to strip off `jsg::Promise`.
-template <typename T> using RemovePromise = typename RemovePromise_<T>::Type;
+template <typename T>
+using RemovePromise = typename RemovePromise_<T>::Type;
 
 // Convenience template to calculate the return type of a function when passed parameter type T.
 // `T = void` is understood to mean no parameters.
@@ -1588,14 +1720,16 @@ class ModuleRegistry;
 // jsg::Object should always be the first inherited class, and jsg::ContextGlobal second.
 // The lifetime of the global object matches the lifetime of the JavaScript context.
 class ContextGlobal {
-public:
+ public:
   ContextGlobal() {}
 
   KJ_DISALLOW_COPY_AND_MOVE(ContextGlobal);
 
-  ModuleRegistry& getModuleRegistry() { return *moduleRegistry; }
+  ModuleRegistry& getModuleRegistry() {
+    return *moduleRegistry;
+  }
 
-private:
+ private:
   kj::Own<ModuleRegistry> moduleRegistry;
 
   void setModuleRegistry(kj::Own<ModuleRegistry> registry) {
@@ -1611,12 +1745,13 @@ private:
 // which is more than just the global object.
 template <typename T>
 class JsContext {
-public:
-  static_assert(std::is_base_of_v<ContextGlobal, T>,
-      "context global type must extend jsg::ContextGlobal");
+ public:
+  static_assert(
+      std::is_base_of_v<ContextGlobal, T>, "context global type must extend jsg::ContextGlobal");
 
-  JsContext(v8::Local<v8::Context> handle, Ref<T> object,
-            kj::Maybe<kj::Own<void>> maybeNewRegistryHandle = kj::none)
+  JsContext(v8::Local<v8::Context> handle,
+      Ref<T> object,
+      kj::Maybe<kj::Own<void>> maybeNewRegistryHandle = kj::none)
       : handle(handle->GetIsolate(), handle),
         object(kj::mv(object)),
         maybeNewRegistryHandle(kj::mv(maybeNewRegistryHandle)) {}
@@ -1624,15 +1759,19 @@ public:
   JsContext(JsContext&&) = default;
   KJ_DISALLOW_COPY(JsContext);
 
-  T& operator*() { return *object; }
-  T* operator->() { return object.get(); }
+  T& operator*() {
+    return *object;
+  }
+  T* operator->() {
+    return object.get();
+  }
 
-  v8::Local<v8::Context> getHandle(v8::Isolate* isolate) {
+  v8::Local<v8::Context> getHandle(v8::Isolate* isolate) const {
     return handle.Get(isolate);
   }
-  v8::Local<v8::Context> getHandle(Lock& js);
+  v8::Local<v8::Context> getHandle(Lock& js) const;
 
-private:
+ private:
   v8::Global<v8::Context> handle;
   Ref<T> object;
   kj::Maybe<kj::Own<void>> maybeNewRegistryHandle;
@@ -1640,12 +1779,18 @@ private:
 
 class BufferSource;
 
-constexpr bool hasPublicVisitForGc_(...) { return false; }
+constexpr bool hasPublicVisitForGc_(...) {
+  return false;
+}
 template <typename T, typename = decltype(&T::visitForGc)>
-constexpr bool hasPublicVisitForGc_(T*) { return true; }
+constexpr bool hasPublicVisitForGc_(T*) {
+  return true;
+}
 
 template <typename T>
-constexpr bool hasPublicVisitForGc() { return hasPublicVisitForGc_((T*)nullptr); }
+constexpr bool hasPublicVisitForGc() {
+  return hasPublicVisitForGc_((T*)nullptr);
+}
 
 // Visitor used during garbage collection. Any resource class that holds `Ref`s should
 // implement GC visitation by declaring a private method like:
@@ -1679,7 +1824,7 @@ constexpr bool hasPublicVisitForGc() { return hasPublicVisitForGc_((T*)nullptr);
 // destroy them. To avoid this situation, make sure your C++ objects have clear ownership, so
 // that the reference graph is a DAG, just like you always would in C++.
 class GcVisitor {
-public:
+ public:
   template <typename T>
   void visit(Ref<T>& ref) {
     ref.inner->visitRef(*this, ref.parent, ref.strong);
@@ -1735,17 +1880,18 @@ public:
   }
 
   void visitAll(auto& collection) {
-    for (auto& item : collection) {
+    for (auto& item: collection) {
       visit(item);
     }
   }
 
-private:
+ private:
   Wrappable& parent;
   kj::Maybe<cppgc::Visitor&> cppgcVisitor;
 
   explicit GcVisitor(Wrappable& parent, kj::Maybe<cppgc::Visitor&> cppgcVisitor)
-      : parent(parent), cppgcVisitor(cppgcVisitor) {}
+      : parent(parent),
+        cppgcVisitor(cppgcVisitor) {}
   KJ_DISALLOW_COPY_AND_MOVE(GcVisitor);
 
   friend class Wrappable;
@@ -1753,12 +1899,18 @@ private:
   friend class HeapTracer;
 };
 
-constexpr bool isGcVisitable_(...) { return false; }
+constexpr bool isGcVisitable_(...) {
+  return false;
+}
 template <typename T, typename = decltype(kj::instance<GcVisitor>().visit(kj::instance<T&>()))>
-constexpr bool isGcVisitable_(T*) { return true; }
+constexpr bool isGcVisitable_(T*) {
+  return true;
+}
 
 template <typename T>
-constexpr bool isGcVisitable() { return isGcVisitable_((T*)nullptr); }
+constexpr bool isGcVisitable() {
+  return isGcVisitable_((T*)nullptr);
+}
 
 // TypeHandler translates between V8 values and local values for a particular type T.
 //
@@ -1782,7 +1934,7 @@ constexpr bool isGcVisitable() { return isGcVisitable_((T*)nullptr); }
 // For resource types, also need to wrap in Ref, i.e. `TypeHandler<jsg::Ref<T>>`.
 template <typename T>
 class TypeHandler {
-public:
+ public:
   // ---------------------------------------------------------------------------
   // Interface for value types (i.e. types not declared using JSG_RESOURCE_TYPE).
   //
@@ -1825,7 +1977,7 @@ public:
 // handler, you can also do `obj.onfoo = func`.
 template <typename T>
 class PropertyReflection {
-public:
+ public:
   // Read the property of this object called `name`, unwrapping it as type `T`.
   kj::Maybe<T> get(Lock& js, kj::StringPtr name);
 
@@ -1842,7 +1994,7 @@ public:
 
   // TODO(someday): Support for reading Symbols and Privates?
 
-private:
+ private:
   kj::Maybe<Wrappable&> self;
 
   typedef kj::Maybe<T> Unwrapper(v8::Isolate*, v8::Local<v8::Object> object, kj::StringPtr name);
@@ -1854,9 +2006,7 @@ private:
 
 template <typename T>
 concept CoercibleType =
-    kj::isSameType<kj::String, T>() ||
-    kj::isSameType<bool, T>() ||
-    kj::isSameType<double, T>();
+    kj::isSameType<kj::String, T>() || kj::isSameType<bool, T>() || kj::isSameType<double, T>();
 // When updating this list, be sure to keep the corresponding checks in the NonCoercibleWrapper
 // class in value.h updated as well.
 
@@ -1963,7 +2113,7 @@ struct JsgConfig {
   bool unwrapCustomThenables = false;
 };
 
-static JsgConfig DEFAULT_JSG_CONFIG = {};
+static constexpr JsgConfig DEFAULT_JSG_CONFIG = {};
 
 template <typename Config>
 static const JsgConfig& getConfig(const Config& config) {
@@ -1982,66 +2132,85 @@ class Isolate;
 // Defined in setup.h -- most code doesn't need to use these directly.
 
 template <typename T>
-constexpr bool isV8Ref(T*) { return false; }
+constexpr bool isV8Ref(T*) {
+  return false;
+}
 template <typename T>
-constexpr bool isV8Ref(V8Ref<T>*) { return true; }
+constexpr bool isV8Ref(V8Ref<T>*) {
+  return true;
+}
 
 template <typename T>
-constexpr bool isV8Ref() { return isV8Ref((T*)nullptr); }
+constexpr bool isV8Ref() {
+  return isV8Ref((T*)nullptr);
+}
 
 template <typename T>
-constexpr bool isV8Local(T*) { return false; }
+constexpr bool isV8Local(T*) {
+  return false;
+}
 template <typename T>
-constexpr bool isV8Local(v8::Local<T>*) { return true; }
+constexpr bool isV8Local(v8::Local<T>*) {
+  return true;
+}
 
 template <typename T>
-constexpr bool isV8Local() { return isV8Local((T*)nullptr); }
+constexpr bool isV8Local() {
+  return isV8Local((T*)nullptr);
+}
 
 template <typename T>
-constexpr bool isV8MaybeLocal(T*) { return false; }
+constexpr bool isV8MaybeLocal(T*) {
+  return false;
+}
 template <typename T>
-constexpr bool isV8MaybeLocal(v8::MaybeLocal<T>*) { return true; }
+constexpr bool isV8MaybeLocal(v8::MaybeLocal<T>*) {
+  return true;
+}
 
 template <typename T>
-constexpr bool isV8MaybeLocal() { return isV8MaybeLocal((T*)nullptr); }
+constexpr bool isV8MaybeLocal() {
+  return isV8MaybeLocal((T*)nullptr);
+}
 
 class AsyncContextFrame;
-template <typename T> class JsRef;
+template <typename T>
+class JsRef;
 
-#define JS_V8_SYMBOLS(V) \
-  V(AsyncIterator) \
-  V(HasInstance) \
-  V(IsConcatSpreadable) \
-  V(Iterator) \
-  V(Match) \
-  V(Replace) \
-  V(Search) \
-  V(Split) \
-  V(ToPrimitive) \
-  V(ToStringTag) \
+#define JS_V8_SYMBOLS(V)                                                                           \
+  V(AsyncIterator)                                                                                 \
+  V(HasInstance)                                                                                   \
+  V(IsConcatSpreadable)                                                                            \
+  V(Iterator)                                                                                      \
+  V(Match)                                                                                         \
+  V(Replace)                                                                                       \
+  V(Search)                                                                                        \
+  V(Split)                                                                                         \
+  V(ToPrimitive)                                                                                   \
+  V(ToStringTag)                                                                                   \
   V(Unscopables)
 
 class JsValue;
 class JsMessage;
-#define JS_TYPE_CLASSES(V) \
-  V(Object) \
-  V(Boolean) \
-  V(Array) \
-  V(String) \
-  V(Symbol) \
-  V(BigInt) \
-  V(Number) \
-  V(Int32) \
-  V(Uint32) \
-  V(Date) \
-  V(RegExp) \
-  V(Map) \
-  V(Set) \
-  V(Promise) \
+#define JS_TYPE_CLASSES(V)                                                                         \
+  V(Object)                                                                                        \
+  V(Boolean)                                                                                       \
+  V(Array)                                                                                         \
+  V(String)                                                                                        \
+  V(Symbol)                                                                                        \
+  V(BigInt)                                                                                        \
+  V(Number)                                                                                        \
+  V(Int32)                                                                                         \
+  V(Uint32)                                                                                        \
+  V(Date)                                                                                          \
+  V(RegExp)                                                                                        \
+  V(Map)                                                                                           \
+  V(Set)                                                                                           \
+  V(Promise)                                                                                       \
   V(Proxy)
 
 #define V(Name) class Js##Name;
-  JS_TYPE_CLASSES(V)
+JS_TYPE_CLASSES(V)
 #undef V
 
 class DOMException;
@@ -2050,7 +2219,7 @@ class DOMException;
 // The adjustment will be automatically decremented when the object is destroyed.
 // The allocation amount can be adjusted up or down during the lifetime of an object.
 class ExternalMemoryAdjustment final {
-public:
+ public:
   ExternalMemoryAdjustment() = default;
   ExternalMemoryAdjustment(v8::Isolate* isolate, size_t amount);
   ExternalMemoryAdjustment(ExternalMemoryAdjustment&& other);
@@ -2065,11 +2234,15 @@ public:
   // the previous amount.
   void set(Lock&, size_t amount);
 
-  inline v8::Isolate* getIsolate() const { return isolate; }
+  inline v8::Isolate* getIsolate() const {
+    return isolate;
+  }
 
-  inline size_t getAmount() const { return amount; }
+  inline size_t getAmount() const {
+    return amount;
+  }
 
-private:
+ private:
   size_t amount = 0;
   v8::Isolate* isolate = nullptr;
 
@@ -2100,7 +2273,7 @@ private:
 // passed down to everyone else from there. See setup.h for details.
 
 class Lock {
-public:
+ public:
   // The underlying V8 isolate, useful for directly calling V8 APIs. Hopefully, this is rarely
   // needed outside JSG itself.
   v8::Isolate* const v8Isolate;
@@ -2116,7 +2289,7 @@ public:
   // This method is intended to be used in callbacks from V8 that pass an isolate pointer but
   // don't provide any further context. Most code should rely on the caller passing in a `Lock&`.
   static Lock& from(v8::Isolate* v8Isolate) {
-    return *reinterpret_cast<Lock*>(v8Isolate->GetData(2));
+    return *reinterpret_cast<Lock*>(v8Isolate->GetData(SET_DATA_LOCK));
   }
 
   // RAII construct that reports amount of external memory to be manually attributed to
@@ -2131,9 +2304,13 @@ public:
   Value parseJson(kj::ArrayPtr<const char> data);
   Value parseJson(v8::Local<v8::String> text);
   template <typename T>
-  kj::String serializeJson(V8Ref<T>& value) { return serializeJson(value.getHandle(*this)); }
+  kj::String serializeJson(V8Ref<T>& value) {
+    return serializeJson(value.getHandle(*this));
+  }
   template <typename T>
-  kj::String serializeJson(V8Ref<T>&& value) { return serializeJson(value.getHandle(*this)); }
+  kj::String serializeJson(V8Ref<T>&& value) {
+    return serializeJson(value.getHandle(*this));
+  }
 
   void recursivelyFreeze(Value& value);
 
@@ -2176,7 +2353,7 @@ public:
   //
   // Some kinds of exceptions explicitly will not be caught:
   // - Exceptions where JavaScript execution cannot continue, such as the "uncatchable exception"
-  //   produced by IsolateBase::terminateExecution().
+  //   produced by IsolateBase::TerminateExecution().
   // - C++ exceptions other than `kj::Exception`, e.g. `std::bad_alloc`. These exceptions are
   //   assumed to be serious enough that they cannot be caught as if they were JavaScript errors,
   //   and instead unwind must continue until C++ catches them.
@@ -2194,15 +2371,14 @@ public:
       } catch (JsExceptionThrown&) {
         // If tryCatch.HasCaught() is false, it typically means that JsExceptionThrown
         // was thrown without an exception actually being scheduled on the isolate.
-        // This may happen in particular when the JsExceptionThrows was the result of
-        // TerminateException() but V8 has since cleared the terminate flag because all
+        // This may happen in particular when the JsExceptionThrown was the result of
+        // TerminateExecution() but V8 has since cleared the terminate flag because all
         // JavaScript call frames have been unwound. Hence, we want to treat this the
         // same as if `CanContinue()` returned false.
         // TODO(cleanup): Do more investigation, maybe explicitly check for the termination
         // flag or arrange to maintain our own separate termination flag to avoid confusion.
-        if (!tryCatch.CanContinue() ||
-            !tryCatch.HasCaught() ||
-            tryCatch.Exception().IsEmpty()) {
+        if (!tryCatch.CanContinue() || !tryCatch.HasCaught() || tryCatch.Exception().IsEmpty()) {
+          tryCatch.ReThrow();
           throw;
         }
 
@@ -2279,7 +2455,9 @@ public:
   // ---------------------------------------------------------------------------
   // Logging stuff
 
-  inline bool areWarningsLogged() const { return warningsLogged; }
+  inline bool areWarningsLogged() const {
+    return warningsLogged;
+  }
 
   // Emits the warning only if there is anywhere for the log to go (for instance,
   // if debug logging is enabled or the inspector is being used).
@@ -2296,7 +2474,6 @@ public:
   // eliminate direct use as much as possible.
   // Convenience methods to unwrap various types of V8 values. All of these could be done manually
   // via the V8 API, but these methods are much easier.
-
 
   v8::Local<v8::Value> v8Undefined();
   v8::Local<v8::Value> v8Null();
@@ -2329,10 +2506,11 @@ public:
   // wrapper. The wrapReturningFunction variation forces the wrapper to use the version that
   // pays attention to the return value.
   virtual v8::Local<v8::Function> wrapReturningFunction(v8::Local<v8::Context> context,
-      jsg::Function<v8::Local<v8::Value>(const v8::FunctionCallbackInfo<v8::Value>& info)> returningFunction) = 0;
+      jsg::Function<v8::Local<v8::Value>(const v8::FunctionCallbackInfo<v8::Value>& info)>
+          returningFunction) = 0;
   virtual v8::Local<v8::Function> wrapPromiseReturningFunction(v8::Local<v8::Context> context,
-      jsg::Function<jsg::Promise<jsg::Value>(
-          const v8::FunctionCallbackInfo<v8::Value>& info)> returningFunction) = 0;
+      jsg::Function<jsg::Promise<jsg::Value>(const v8::FunctionCallbackInfo<v8::Value>& info)>
+          returningFunction) = 0;
   // TODO(later): See if we can easily combine wrapSimpleFunction and wrapReturningFunction
   // into one.
 
@@ -2350,10 +2528,15 @@ public:
   // Use to enable/disable dynamic code evaluation (via eval(), new Function(), or WebAssembly).
   void setAllowEval(bool allow);
 
+  // Install JSPI on the current context. Currently used only for Python workers.
+  void installJspi();
+
   void setCaptureThrowsAsRejections(bool capture);
   void setCommonJsExportDefault(bool exportDefault);
 
   void setNodeJsCompatEnabled();
+  void setToStringTag();
+  void disableTopLevelAwait();
 
   using Logger = void(Lock&, kj::StringPtr);
   void setLoggerCallback(kj::Function<Logger>&& logger);
@@ -2391,8 +2574,15 @@ public:
     }
   }
 
-  virtual Ref<DOMException> domException(kj::String name, kj::String message,
-      kj::Maybe<kj::String> stackValue = kj::none) = 0;
+  virtual Ref<DOMException> domException(
+      kj::String name, kj::String message, kj::Maybe<kj::String> stackValue = kj::none) = 0;
+
+  // Get the prototype object for the given C++ type (which must be a JSG_RESOURCE_TYPE).
+  //
+  // WARNING: A malicious script can tamper with this by overwriting the `prototype` property
+  // of the class object.
+  template <typename T>
+  JsObject getPrototypeFor();
 
   // ====================================================================================
   JsObject global() KJ_WARN_UNUSED_RESULT;
@@ -2421,6 +2611,9 @@ public:
   JsSymbol symbolShared(kj::StringPtr) KJ_WARN_UNUSED_RESULT;
   JsSymbol symbolInternal(kj::StringPtr) KJ_WARN_UNUSED_RESULT;
   JsObject obj() KJ_WARN_UNUSED_RESULT;
+  JsObject obj(
+      kj::ArrayPtr<kj::StringPtr> keys, kj::ArrayPtr<jsg::JsValue> values) KJ_WARN_UNUSED_RESULT;
+  JsObject objNoProto() KJ_WARN_UNUSED_RESULT;
   JsMap map() KJ_WARN_UNUSED_RESULT;
   JsValue external(void*) KJ_WARN_UNUSED_RESULT;
   JsValue error(kj::StringPtr message) KJ_WARN_UNUSED_RESULT;
@@ -2429,6 +2622,11 @@ public:
   JsDate date(double timestamp) KJ_WARN_UNUSED_RESULT;
   JsDate date(kj::Date date) KJ_WARN_UNUSED_RESULT;
   JsDate date(kj::StringPtr date) KJ_WARN_UNUSED_RESULT;
+
+  // Returns a JsObject that is backed internally by a v8::External object that
+  // takes ownership over the inner.
+  template <typename T>
+  JsObject opaque(T&& inner) KJ_WARN_UNUSED_RESULT;
 
   // Returns a jsg::BufferSource whose underlying JavaScript handle is a Uint8Array.
   BufferSource bytes(kj::Array<kj::byte> data) KJ_WARN_UNUSED_RESULT;
@@ -2451,17 +2649,18 @@ public:
   };
 
   JsRegExp regexp(kj::StringPtr pattern,
-                  RegExpFlags flags = RegExpFlags::kNONE,
-                  kj::Maybe<uint32_t> backtrackLimit = kj::none)
-                  KJ_WARN_UNUSED_RESULT;
+      RegExpFlags flags = RegExpFlags::kNONE,
+      kj::Maybe<uint32_t> backtrackLimit = kj::none) KJ_WARN_UNUSED_RESULT;
 
-  template <typename...Args> requires (std::assignable_from<JsValue&, Args> && ...)
-  JsArray arr(const Args&...args) KJ_WARN_UNUSED_RESULT;
+  template <typename... Args>
+    requires(std::assignable_from<JsValue&, Args> && ...)
+  JsArray arr(const Args&... args) KJ_WARN_UNUSED_RESULT;
 
   JsArray arr(kj::ArrayPtr<JsValue> values) KJ_WARN_UNUSED_RESULT;
 
-  template <typename...Args> requires (std::assignable_from<JsValue&, Args> && ...)
-  JsSet set(const Args&...args) KJ_WARN_UNUSED_RESULT;
+  template <typename... Args>
+    requires(std::assignable_from<JsValue&, Args> && ...)
+  JsSet set(const Args&... args) KJ_WARN_UNUSED_RESULT;
 
 #define V(Name) JsSymbol symbol##Name() KJ_WARN_UNUSED_RESULT;
   JS_V8_SYMBOLS(V)
@@ -2472,9 +2671,11 @@ public:
   void runMicrotasks();
   void terminateExecution();
 
+  // Logs and reports the error to tail workers (if called within an request),
+  // the inspector (if attached), or to KJ_LOG(Info).
   virtual void reportError(const JsValue& value) = 0;
 
-private:
+ private:
   // Mark the jsg::Lock as being disallowed from being passed as a parameter into
   // a kj promise coroutine. Note that this only blocks directly passing the Lock
   // in. Types that have the Lock included as a member field won't be caught and
@@ -2499,25 +2700,27 @@ private:
 
   friend class JsObject;
   virtual kj::Maybe<Object&> getInstance(v8::Local<v8::Object> obj, const std::type_info& type) = 0;
+  virtual v8::Local<v8::Object> getPrototypeFor(const std::type_info& type) = 0;
 };
 
 // Ensures that the given fn is run within both a handlescope and the context scope.
 // The lock must be assignable to a jsg::Lock, and the context must be or be assignable
 // to a v8::Local<v8::Context>. The context will be evaluated within the handle scope.
-#define JSG_WITHIN_CONTEXT_SCOPE(lock, context, fn)                            \
-    ((jsg::Lock&)lock).withinHandleScope([&]() -> auto {                       \
-    v8::Local<v8::Context> ctx = context;                                      \
-    KJ_ASSERT(!ctx.IsEmpty(), "unable to enter invalid v8::Context");          \
-    v8::Context::Scope scope(ctx);                                             \
-    return fn((jsg::Lock&)lock); })
+#define JSG_WITHIN_CONTEXT_SCOPE(lock, context, fn)                                                \
+  ((jsg::Lock&)lock).withinHandleScope([&]() -> auto {                                             \
+    v8::Local<v8::Context> ctx = context;                                                          \
+    KJ_ASSERT(!ctx.IsEmpty(), "unable to enter invalid v8::Context");                              \
+    v8::Context::Scope scope(ctx);                                                                 \
+    return fn((jsg::Lock&)lock);                                                                   \
+  })
 
 // The V8StackScope is used only as a marker to prove that we are running in the V8 stack
 // established by calling runInV8Stack(...)
 class V8StackScope final {
-public:
+ public:
   KJ_DISALLOW_COPY_AND_MOVE(V8StackScope);
 
-private:
+ private:
   V8StackScope() = default;
   KJ_DISALLOW_AS_COROUTINE_PARAM;
 
@@ -2600,8 +2803,7 @@ v8::Local<v8::Value> deepClone(v8::Local<v8::Context> context, v8::Local<v8::Val
 
 template <typename T>
 V8Ref<T> V8Ref<T>::deepClone(jsg::Lock& js) {
-  return js.v8Ref(jsg::deepClone(js.v8Context(), getHandle(js))
-      .template As<T>());
+  return js.v8Ref(jsg::deepClone(js.v8Context(), getHandle(js)).template As<T>());
 }
 
 template <typename T>
@@ -2609,22 +2811,23 @@ inline HashableV8Ref<T> HashableV8Ref<T>::addRef(jsg::Lock& js) {
   return HashableV8Ref(js.v8Isolate, this->getHandle(js), identityHash);
 }
 
-template <typename  T>
-inline v8::Local<T> V8Ref<T>::getHandle(jsg::Lock& js) {
+template <typename T>
+inline v8::Local<T> V8Ref<T>::getHandle(jsg::Lock& js) const {
   return getHandle(js.v8Isolate);
 }
 
-inline v8::Local<v8::Data> Data::getHandle(jsg::Lock& js) {
+inline v8::Local<v8::Data> Data::getHandle(jsg::Lock& js) const {
   return getHandle(js.v8Isolate);
 }
 
 template <typename T>
-inline v8::Local<v8::Context> JsContext<T>::getHandle(Lock& js) {
+inline v8::Local<v8::Context> JsContext<T>::getHandle(Lock& js) const {
   return handle.Get(js.v8Isolate);
 }
 
 }  // namespace workerd::jsg
 
+// clang-format off
 // These two includes are needed for the JSG type glue macros to work.
 #include "buffersource.h"
 #include "modules.h"
@@ -2635,3 +2838,4 @@ inline v8::Local<v8::Context> JsContext<T>::getHandle(Lock& js) {
 #include "function.h"
 #include "iterator.h"
 #include "jsvalue.h"
+// clang-format on

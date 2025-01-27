@@ -3,7 +3,8 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 #include "gpu-query-set.h"
-#include "workerd/jsg/exception.h"
+
+#include <workerd/jsg/exception.h>
 
 namespace workerd::api::gpu {
 
@@ -19,4 +20,4 @@ wgpu::QueryType parseQueryType(kj::StringPtr type) {
   JSG_FAIL_REQUIRE(TypeError, "unknown Query type", type);
 }
 
-} // namespace workerd::api::gpu
+}  // namespace workerd::api::gpu

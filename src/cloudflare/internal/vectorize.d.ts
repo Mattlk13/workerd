@@ -33,7 +33,14 @@ interface VectorizeError {
  *
  * This list is expected to grow as support for more operations are released.
  */
-type VectorizeVectorMetadataFilterOp = "$eq" | "$ne";
+type VectorizeVectorMetadataFilterOp =
+  | '$eq'
+  | '$ne'
+  | '$lt'
+  | '$lte'
+  | '$gt'
+  | '$gte';
+type VectorizeVectorMetadataFilterCollectionOp = '$in' | '$nin';
 
 /**
  * Filter criteria for vector metadata used to limit the retrieved query result set.
@@ -47,6 +54,12 @@ type VectorizeVectorMetadataFilter = {
           VectorizeVectorMetadataValue,
           string[]
         > | null;
+      }
+    | {
+        [Op in VectorizeVectorMetadataFilterCollectionOp]?: Exclude<
+          VectorizeVectorMetadataValue,
+          string[]
+        >[];
       };
 };
 
@@ -54,7 +67,7 @@ type VectorizeVectorMetadataFilter = {
  * Supported distance metrics for an index.
  * Distance metrics determine how other "similar" vectors are determined.
  */
-type VectorizeDistanceMetric = "euclidean" | "cosine" | "dot-product";
+type VectorizeDistanceMetric = 'euclidean' | 'cosine' | 'dot-product';
 
 /**
  * Metadata return levels for a Vectorize query.
@@ -65,15 +78,13 @@ type VectorizeDistanceMetric = "euclidean" | "cosine" | "dot-product";
  * @property indexed  Return all metadata fields configured for indexing in the vector return set. This level of retrieval is "free" in that no additional overhead is incurred returning this data. However, note that indexed metadata is subject to truncation (especially for larger strings).
  * @property none     No indexed metadata will be returned.
  */
-type VectorizeMetadataRetrievalLevel = "all" | "indexed" | "none";
+type VectorizeMetadataRetrievalLevel = 'all' | 'indexed' | 'none';
 
-interface VectorizeQueryOptions<
-  MetadataReturn extends boolean | VectorizeMetadataRetrievalLevel = boolean,
-> {
+interface VectorizeQueryOptions {
   topK?: number;
   namespace?: string;
   returnValues?: boolean;
-  returnMetadata?: MetadataReturn;
+  returnMetadata?: boolean | VectorizeMetadataRetrievalLevel;
   filter?: VectorizeVectorMetadataFilter;
 }
 
@@ -113,7 +124,7 @@ interface VectorizeIndexDetails {
  */
 interface VectorizeIndexInfo {
   /** The number of records containing vectors within the index. */
-  vectorsCount: number;
+  vectorCount: number;
   /** Number of dimensions the index has been configured for. */
   dimensions: number;
   /** ISO 8601 datetime of the last processed mutation on in the index. All changes before this mutation will be reflected in the index state. */
@@ -139,8 +150,8 @@ interface VectorizeVector {
 /**
  * Represents a matched vector for a query along with its score and (if specified) the matching vector information.
  */
-type VectorizeMatch = Pick<Partial<VectorizeVector>, "values"> &
-  Omit<VectorizeVector, "values"> & {
+type VectorizeMatch = Pick<Partial<VectorizeVector>, 'values'> &
+  Omit<VectorizeVector, 'values'> & {
     /** The score or rank for similarity, when returned as a result */
     score: number;
   };
@@ -196,7 +207,7 @@ declare abstract class VectorizeIndex {
    */
   public query(
     vector: VectorFloatArray | number[],
-    options: VectorizeQueryOptions
+    options?: VectorizeQueryOptions
   ): Promise<VectorizeMatches>;
   /**
    * Insert a list of vectors into the index dataset. If a provided id exists, an error will be thrown.
@@ -243,7 +254,17 @@ declare abstract class Vectorize {
    */
   public query(
     vector: VectorFloatArray | number[],
-    options: VectorizeQueryOptions<VectorizeMetadataRetrievalLevel>
+    options?: VectorizeQueryOptions
+  ): Promise<VectorizeMatches>;
+  /**
+   * Use the provided vector-id to perform a similarity search across the index.
+   * @param vectorId Id for a vector in the index against which the index should be queried.
+   * @param options Configuration options to massage the returned data.
+   * @returns A promise that resolves with matched and scored vectors.
+   */
+  public queryById(
+    vectorId: string,
+    options?: VectorizeQueryOptions
   ): Promise<VectorizeMatches>;
   /**
    * Insert a list of vectors into the index dataset. If a provided id exists, an error will be thrown.

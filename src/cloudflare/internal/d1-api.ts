@@ -2,88 +2,161 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+import flags from 'workerd:compatibility-flags';
+
 interface Fetcher {
-  fetch: typeof fetch
+  fetch: typeof fetch;
 }
 
 type D1Response = {
-  success: true
-  meta: Record<string, unknown>
-  error?: never
-}
+  success: true;
+  meta: Record<string, unknown>;
+  error?: never;
+};
 
 type D1Result<T = unknown> = D1Response & {
-  results: T[]
-}
+  results: T[];
+};
 
 type D1RawOptions = {
-  columnNames?: boolean
-}
+  columnNames?: boolean;
+};
 
 type D1UpstreamFailure = {
-  results?: never
-  error: string
-  success: false
-  meta: Record<string, unknown>
-}
+  results?: never;
+  error: string;
+  success: false;
+  meta: Record<string, unknown>;
+};
 
 type D1RowsColumns<T = unknown> = D1Response & {
   results: {
-    columns: string[]
-    rows: T[][]
-  }
-}
+    columns: string[];
+    rows: T[][];
+  };
+};
 
 type D1UpstreamSuccess<T = unknown> =
   | D1Result<T>
   | D1Response
-  | D1RowsColumns<T>
+  | D1RowsColumns<T>;
 
-type D1UpstreamResponse<T = unknown> = D1UpstreamSuccess<T> | D1UpstreamFailure
+type D1UpstreamResponse<T = unknown> = D1UpstreamSuccess<T> | D1UpstreamFailure;
 
 type D1ExecResult = {
-  count: number
-  duration: number
-}
+  count: number;
+  duration: number;
+};
 
 type SQLError = {
-  error: string
-}
+  error: string;
+};
 
-type ResultsFormat = 'ARRAY_OF_OBJECTS' | 'ROWS_AND_COLUMNS' | 'NONE'
+type ResultsFormat = 'ARRAY_OF_OBJECTS' | 'ROWS_AND_COLUMNS' | 'NONE';
+
+type D1SessionCommitTokenOrConstraint = string;
+type D1SessionCommitToken = string;
+// Indicates that the first query should go to the primary, and the rest queries
+// using the same D1DatabaseSession will go to any replica that is consistent with
+// the commit token maintained by the session (returned by the first query).
+const D1_SESSION_CONSTRAINT_FIRST_PRIMARY = 'first-primary';
+// Indicates that the first query can go anywhere (primary or replica), and the rest queries
+// using the same D1DatabaseSession will go to any replica that is consistent with
+// the commit token maintained by the session (returned by the first query).
+const D1_SESSION_CONSTRAINT_FIRST_UNCONSTRAINED = 'first-unconstrained';
+
+// Parsed by the D1 eyeball worker.
+const D1_SESSION_COMMIT_TOKEN_HTTP_HEADER = 'x-cf-d1-session-commit-token';
 
 class D1Database {
-  private readonly fetcher: Fetcher
+  private readonly alwaysPrimarySession: D1DatabaseSessionAlwaysPrimary;
+  protected readonly fetcher: Fetcher;
 
   public constructor(fetcher: Fetcher) {
-    this.fetcher = fetcher
+    this.fetcher = fetcher;
+    this.alwaysPrimarySession = new D1DatabaseSessionAlwaysPrimary(
+      this.fetcher
+    );
   }
 
   public prepare(query: string): D1PreparedStatement {
-    return new D1PreparedStatement(this, query)
+    return new D1PreparedStatement(this.alwaysPrimarySession, query);
+  }
+
+  public async batch<T = unknown>(
+    statements: D1PreparedStatement[]
+  ): Promise<D1Result<T>[]> {
+    return this.alwaysPrimarySession.batch(statements);
+  }
+
+  public async exec(query: string): Promise<D1ExecResult> {
+    return this.alwaysPrimarySession.exec(query);
   }
 
   // DEPRECATED, TO BE REMOVED WITH NEXT BREAKING CHANGE
   public async dump(): Promise<ArrayBuffer> {
-    const response = await this.fetcher.fetch('http://d1/dump', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-    })
-    if (response.status !== 200) {
-      try {
-        const err = (await response.json()) as SQLError
-        throw new Error(`D1_DUMP_ERROR: ${err.error}`, {
-          cause: new Error(err.error),
-        })
-      } catch {
-        throw new Error(`D1_DUMP_ERROR: Status + ${response.status}`, {
-          cause: new Error(`Status ${response.status}`),
-        })
-      }
+    return this.alwaysPrimarySession.dump();
+  }
+}
+
+class D1DatabaseWithSessionAPI extends D1Database {
+  public constructor(fetcher: Fetcher) {
+    super(fetcher);
+  }
+
+  public withSession(
+    constraintOrToken: D1SessionCommitTokenOrConstraint | null | undefined
+  ): D1DatabaseSession {
+    constraintOrToken = constraintOrToken?.trim();
+    if (constraintOrToken == null || constraintOrToken === '') {
+      constraintOrToken = D1_SESSION_CONSTRAINT_FIRST_UNCONSTRAINED;
     }
-    return await response.arrayBuffer()
+    return new D1DatabaseSession(this.fetcher, constraintOrToken);
+  }
+}
+
+class D1DatabaseSession {
+  protected fetcher: Fetcher;
+  protected commitTokenOrConstraint: D1SessionCommitTokenOrConstraint;
+
+  public constructor(
+    fetcher: Fetcher,
+    commitTokenOrConstraint: D1SessionCommitTokenOrConstraint
+  ) {
+    this.fetcher = fetcher;
+    this.commitTokenOrConstraint = commitTokenOrConstraint;
+
+    if (!this.commitTokenOrConstraint) {
+      throw new Error('D1_SESSION_ERROR: invalid commit token or constraint');
+    }
+  }
+
+  // Update the commit token IFF the given newCommitToken is more recent.
+  // The commit token held in the session should always be the latest value we
+  // have observed in the responses to our API. There can be cases where we have concurrent
+  // queries running within the same session, and therefore here we ensure we only
+  // retain the latest commit token received.
+  // @returns the final commit token after the update.
+  protected _updateCommitToken(
+    newCommitToken: D1SessionCommitToken
+  ): D1SessionCommitToken | null {
+    newCommitToken = newCommitToken.trim();
+    if (!newCommitToken) {
+      // We should not be receiving invalid commit tokens, but just be defensive.
+      return this.getCommitToken();
+    }
+    const currentCommitToken = this.getCommitToken();
+    if (
+      currentCommitToken === null ||
+      currentCommitToken.localeCompare(newCommitToken) < 0
+    ) {
+      this.commitTokenOrConstraint = newCommitToken;
+    }
+    return this.getCommitToken();
+  }
+
+  public prepare(sql: string): D1PreparedStatement {
+    return new D1PreparedStatement(this, sql);
   }
 
   public async batch<T = unknown>(
@@ -94,38 +167,57 @@ class D1Database {
       statements.map((s: D1PreparedStatement) => s.statement),
       statements.map((s: D1PreparedStatement) => s.params),
       'ROWS_AND_COLUMNS'
-    )) as D1UpstreamSuccess<T>[]
-    return exec.map(toArrayOfObjects)
+    )) as D1UpstreamSuccess<T>[];
+    return exec.map(toArrayOfObjects);
   }
 
-  public async exec(query: string): Promise<D1ExecResult> {
-    const lines = query.trim().split('\n')
-    const _exec = await this._send('/execute', lines, [], 'NONE')
-    const exec = Array.isArray(_exec) ? _exec : [_exec]
-    const error = exec
-      .map((r) => {
-        return r.error ? 1 : 0
-      })
-      .indexOf(1)
-    if (error !== -1) {
-      throw new Error(
-        `D1_EXEC_ERROR: Error in line ${error + 1}: ${lines[error]}: ${
-          exec[error]?.error
-        }`,
-        {
-          cause: new Error(
-            `Error in line ${error + 1}: ${lines[error]}: ${exec[error]?.error}`
-          ),
-        }
-      )
-    } else {
-      return {
-        count: exec.length,
-        duration: exec.reduce((p, c) => {
-          return p + (c.meta['duration'] as number)
-        }, 0),
-      }
+  // Returns the latest commit token we received from all responses processed so far.
+  // It does not return constraints that might have be passed during the session creation.
+  public getCommitToken(): D1SessionCommitToken | null {
+    switch (this.commitTokenOrConstraint) {
+      // First to any replica, and then anywhere that satisfies the commit token.
+      case D1_SESSION_CONSTRAINT_FIRST_UNCONSTRAINED:
+        return null;
+      // First to primary, and then anywhere that satisfies the commit token.
+      case D1_SESSION_CONSTRAINT_FIRST_PRIMARY:
+        return null;
+      default:
+        return this.commitTokenOrConstraint;
     }
+  }
+
+  // fetch will append the commit token header to all outgoing fetch calls.
+  // The response headers are parsed automatically, extracting the commit token
+  // from the response headers and updating it through `_updateCommitToken(token)`.
+  protected async _wrappedFetch(
+    input: RequestInfo | URL,
+    init?: RequestInit
+  ): Promise<Response> {
+    // We append the commit token to all fetch queries.
+    const h = new Headers(init?.headers);
+
+    // We send either a constraint, or a commit token, and the eyeball worker will figure out
+    // what to do based on the value. This simulates the same flow as the REST API would behave too.
+    if (this.commitTokenOrConstraint) {
+      h.set(D1_SESSION_COMMIT_TOKEN_HTTP_HEADER, this.commitTokenOrConstraint);
+    }
+
+    if (!init) {
+      init = { headers: h };
+    } else {
+      init.headers = h;
+    }
+    return this.fetcher.fetch(input, init).then((resp) => {
+      const newCommitToken = resp.headers.get(
+        D1_SESSION_COMMIT_TOKEN_HTTP_HEADER
+      );
+      // TODO(soon): Add validation of the received commit token, in case we sent a commit token,
+      //             otherwise sessions functionality could be inconsistent.
+      if (newCommitToken) {
+        this._updateCommitToken(newCommitToken);
+      }
+      return resp;
+    });
   }
 
   public async _sendOrThrow<T = unknown>(
@@ -134,14 +226,14 @@ class D1Database {
     params: unknown[],
     resultsFormat: ResultsFormat
   ): Promise<D1UpstreamSuccess<T>[] | D1UpstreamSuccess<T>> {
-    const results = await this._send(endpoint, query, params, resultsFormat)
-    const firstResult = firstIfArray(results)
+    const results = await this._send(endpoint, query, params, resultsFormat);
+    const firstResult = firstIfArray(results);
     if (!firstResult.success) {
       throw new Error(`D1_ERROR: ${firstResult.error}`, {
         cause: new Error(firstResult.error),
-      })
+      });
     } else {
-      return results as D1UpstreamSuccess<T>[] | D1UpstreamSuccess<T>
+      return results as D1UpstreamSuccess<T>[] | D1UpstreamSuccess<T>;
     }
   }
 
@@ -155,60 +247,139 @@ class D1Database {
     const body = JSON.stringify(
       Array.isArray(query)
         ? query.map((s: string, index: number) => {
-            return { sql: s, params: params[index] }
+            return { sql: s, params: params[index] };
           })
         : {
             sql: query,
             params: params,
           }
-    )
+    );
 
-    const url = new URL(endpoint, 'http://d1')
-    url.searchParams.set('resultsFormat', resultsFormat)
-    const response = await this.fetcher.fetch(url.href, {
+    const url = new URL(endpoint, 'http://d1');
+    url.searchParams.set('resultsFormat', resultsFormat);
+    const response = await this._wrappedFetch(url.href, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
       },
       body,
-    })
+    });
 
     try {
       const answer = await toJson<
         D1UpstreamResponse<T>[] | D1UpstreamResponse<T>
-      >(response)
+      >(response);
 
       if (Array.isArray(answer)) {
-        return answer.map((r: D1UpstreamResponse<T>) => mapD1Result<T>(r))
+        return answer.map((r: D1UpstreamResponse<T>) => mapD1Result<T>(r));
       } else {
-        return mapD1Result<T>(answer)
+        return mapD1Result<T>(answer);
       }
     } catch (_e: unknown) {
-      const e = _e as Error
+      const e = _e as Error;
       const message =
         (e.cause as Error | undefined)?.message ||
         e.message ||
-        'Something went wrong'
+        'Something went wrong';
       throw new Error(`D1_ERROR: ${message}`, {
         cause: new Error(message),
-      })
+      });
     }
   }
 }
 
+class D1DatabaseSessionAlwaysPrimary extends D1DatabaseSession {
+  public constructor(fetcher: Fetcher) {
+    // Will always go to primary, since we won't be ever updating this constraint.
+    super(fetcher, D1_SESSION_CONSTRAINT_FIRST_PRIMARY);
+  }
+
+  // We ignore commit tokens for this special type of session,
+  // since all queries are sent to the primary.
+  public override _updateCommitToken(
+    _newCommitToken: D1SessionCommitToken
+  ): D1SessionCommitToken | null {
+    return null;
+  }
+
+  // There is not commit token returned every by this special type of session,
+  // since all queries are sent to the primary.
+  public override getCommitToken(): D1SessionCommitToken | null {
+    return null;
+  }
+
+  //////////////////////////////////////////////////////////////////////////////////////////////
+  // These are only used by the D1Database which is our existing API pre-Sessions API.
+  // For backwards compatibility they always go to the primary database.
+  //
+
+  public async exec(query: string): Promise<D1ExecResult> {
+    const lines = query.trim().split('\n');
+    const _exec = await this._send('/execute', lines, [], 'NONE');
+    const exec = Array.isArray(_exec) ? _exec : [_exec];
+    const error = exec
+      .map((r) => {
+        return r.error ? 1 : 0;
+      })
+      .indexOf(1);
+    if (error !== -1) {
+      throw new Error(
+        `D1_EXEC_ERROR: Error in line ${error + 1}: ${lines[error]}: ${
+          exec[error]?.error
+        }`,
+        {
+          cause: new Error(
+            `Error in line ${error + 1}: ${lines[error]}: ${exec[error]?.error}`
+          ),
+        }
+      );
+    } else {
+      return {
+        count: exec.length,
+        duration: exec.reduce((p, c) => {
+          return p + (c.meta['duration'] as number);
+        }, 0),
+      };
+    }
+  }
+
+  // DEPRECATED, TO BE REMOVED WITH NEXT BREAKING CHANGE
+  public async dump(): Promise<ArrayBuffer> {
+    const response = await this._wrappedFetch('http://d1/dump', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+    });
+    if (response.status !== 200) {
+      try {
+        const err = (await response.json()) as SQLError;
+        throw new Error(`D1_DUMP_ERROR: ${err.error}`, {
+          cause: new Error(err.error),
+        });
+      } catch {
+        throw new Error(`D1_DUMP_ERROR: Status + ${response.status}`, {
+          cause: new Error(`Status ${response.status}`),
+        });
+      }
+    }
+    return await response.arrayBuffer();
+  }
+}
+
 class D1PreparedStatement {
-  private readonly database: D1Database
-  public readonly statement: string
-  public readonly params: unknown[]
+  private readonly dbSession: D1DatabaseSession;
+  public readonly statement: string;
+  public readonly params: unknown[];
 
   public constructor(
-    database: D1Database,
+    dbSession: D1DatabaseSession,
     statement: string,
     values?: unknown[]
   ) {
-    this.database = database
-    this.statement = statement
-    this.params = values || []
+    this.dbSession = dbSession;
+    this.statement = statement;
+    this.params = values || [];
   }
 
   public bind(...values: unknown[]): D1PreparedStatement {
@@ -216,28 +387,28 @@ class D1PreparedStatement {
     const transformedValues = values.map((r: unknown): unknown => {
       const rType = typeof r;
       if (rType === 'number' || rType === 'string') {
-        return r
+        return r;
       } else if (rType === 'boolean') {
         return r ? 1 : 0;
       } else if (rType === 'object') {
         // nulls are objects in javascript
-        if (r == null) return r
+        if (r == null) return r;
         // arrays with uint8's are good
         if (
           Array.isArray(r) &&
           r.every((b: unknown) => {
-            return typeof b == 'number' && b >= 0 && b < 256
+            return typeof b == 'number' && b >= 0 && b < 256;
           })
         )
-          return r as unknown[]
+          return r as unknown[];
         // convert ArrayBuffer to array
         if (r instanceof ArrayBuffer) {
-          return Array.from(new Uint8Array(r))
+          return Array.from(new Uint8Array(r));
         }
         // convert view to array
         if (ArrayBuffer.isView(r)) {
           // For some reason TS doesn't think this is valid, but it is!
-          return Array.from(r as unknown as ArrayLike<unknown>)
+          return Array.from(r as unknown as ArrayLike<unknown>);
         }
       }
 
@@ -246,107 +417,108 @@ class D1PreparedStatement {
         {
           cause: new Error(`Type '${rType}' not supported for value '${r}'`),
         }
-      )
-    })
+      );
+    });
     return new D1PreparedStatement(
-      this.database,
+      this.dbSession,
       this.statement,
       transformedValues
-    )
+    );
   }
 
-  public async first<T = unknown>(colName: string): Promise<T | null>
-  public async first<T = Record<string, unknown>>(): Promise<T | null>
+  public async first<T = unknown>(colName: string): Promise<T | null>;
+  public async first<T = Record<string, unknown>>(): Promise<T | null>;
   public async first<T = unknown>(
     colName?: string
   ): Promise<Record<string, T> | T | null> {
     const info = firstIfArray(
-      await this.database._sendOrThrow<Record<string, T>>(
+      await this.dbSession._sendOrThrow<Record<string, T>>(
         '/query',
         this.statement,
         this.params,
         'ROWS_AND_COLUMNS'
       )
-    )
+    );
 
-    const results = toArrayOfObjects(info).results
-    const hasResults = results.length > 0
-    if (!hasResults) return null
+    const results = toArrayOfObjects(info).results;
+    const hasResults = results.length > 0;
+    if (!hasResults) return null;
 
-    const firstResult = results[0]!
+    const firstResult = results[0]!;
     if (colName !== undefined) {
-      if (hasResults && firstResult[colName] === undefined) {
+      if (firstResult[colName] === undefined) {
         throw new Error(`D1_COLUMN_NOTFOUND: Column not found (${colName})`, {
           cause: new Error('Column not found'),
-        })
+        });
       }
-      return firstResult[colName]!
+      return firstResult[colName]!;
     } else {
-      return firstResult
+      return firstResult;
     }
   }
 
+  /* eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters */
   public async run<T = Record<string, unknown>>(): Promise<D1Response> {
     return firstIfArray(
-      await this.database._sendOrThrow<T>(
+      await this.dbSession._sendOrThrow<T>(
         '/execute',
         this.statement,
         this.params,
         'NONE'
       )
-    )
+    );
   }
 
   public async all<T = Record<string, unknown>>(): Promise<D1Result<T[]>> {
     return toArrayOfObjects(
       firstIfArray(
-        await this.database._sendOrThrow<T[]>(
+        await this.dbSession._sendOrThrow<T[]>(
           '/query',
           this.statement,
           this.params,
           'ROWS_AND_COLUMNS'
         )
       )
-    )
+    );
   }
 
   public async raw<T = unknown[]>(options?: D1RawOptions): Promise<T[]> {
     const s = firstIfArray(
-      await this.database._sendOrThrow<Record<string, unknown>>(
+      await this.dbSession._sendOrThrow<Record<string, unknown>>(
         '/query',
         this.statement,
         this.params,
         'ROWS_AND_COLUMNS'
       )
-    )
+    );
     // If no results returned, return empty array
-    if (!('results' in s)) return []
+    if (!('results' in s)) return [];
 
     // If ARRAY_OF_OBJECTS returned, extract cells
     if (Array.isArray(s.results)) {
-      const raw: T[] = []
+      const raw: T[] = [];
       for (const row of s.results) {
         if (options?.columnNames && raw.length === 0) {
-          raw.push(Array.from(Object.keys(row)) as T)
+          raw.push(Array.from(Object.keys(row)) as T);
         }
         const entry = Object.keys(row).map((k) => {
-          return row[k]
-        })
-        raw.push(entry as T)
+          return row[k];
+        });
+        raw.push(entry as T);
       }
-      return raw
+      return raw;
     } else {
       // Otherwise, data is already in the correct format
       return [
         ...(options?.columnNames ? [s.results.columns as T] : []),
         ...(s.results.rows as T[]),
-      ]
+      ];
     }
   }
 }
 
 function firstIfArray<T>(results: T | T[]): T {
-  return Array.isArray(results) ? results[0]! : results
+  return Array.isArray(results) ? results[0]! : results;
 }
 
 // This shim may be used against an older version of D1 that doesn't support
@@ -357,20 +529,20 @@ function toArrayOfObjects<T>(response: D1UpstreamSuccess<T>): D1Result<T> {
     return {
       ...response,
       results: [],
-    }
+    };
 
-  const results = response.results
+  const results = response.results;
   if (Array.isArray(results)) {
-    return { ...response, results }
+    return { ...response, results };
   } else {
-    const { rows, columns } = results
+    const { rows, columns } = results;
     return {
       ...response,
       results: rows.map(
         (row) =>
           Object.fromEntries(row.map((cell, i) => [columns[i], cell])) as T
       ),
-    }
+    };
   }
 }
 
@@ -380,25 +552,28 @@ function mapD1Result<T>(result: D1UpstreamResponse<T>): D1UpstreamResponse<T> {
   return result.error
     ? {
         success: false,
-        meta: result.meta || {},
+        meta: result.meta,
         error: result.error,
       }
     : {
         success: true,
-        meta: result.meta || {},
+        meta: result.meta,
         ...('results' in result ? { results: result.results } : {}),
-      }
+      };
 }
 
 async function toJson<T = unknown>(response: Response): Promise<T> {
-  const body = await response.text()
+  const body = await response.text();
   try {
-    return JSON.parse(body) as T
+    return JSON.parse(body) as T;
   } catch {
-    throw new Error(`Failed to parse body as JSON, got: ${body}`)
+    throw new Error(`Failed to parse body as JSON, got: ${body}`);
   }
 }
 
 export default function makeBinding(env: { fetcher: Fetcher }): D1Database {
-  return new D1Database(env.fetcher)
+  if (flags.enableD1WithSessionsAPI) {
+    return new D1DatabaseWithSessionAPI(env.fetcher);
+  }
+  return new D1Database(env.fetcher);
 }

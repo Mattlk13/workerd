@@ -5,13 +5,15 @@
 #pragma once
 
 #include "gpu-utils.h"
-#include <webgpu/webgpu_cpp.h>
+
 #include <workerd/jsg/jsg.h>
+
+#include <webgpu/webgpu_cpp.h>
 
 namespace workerd::api::gpu {
 
-class GPUSupportedFeatures : public jsg::Object {
-public:
+class GPUSupportedFeatures: public jsg::Object {
+ public:
   explicit GPUSupportedFeatures(kj::Array<wgpu::FeatureName> features);
   JSG_RESOURCE_TYPE(GPUSupportedFeatures) {
     JSG_METHOD(has);
@@ -19,15 +21,15 @@ public:
   }
 
   void visitForMemoryInfo(jsg::MemoryTracker& tracker) const {
-    for (const auto& feature : enabled_) {
+    for (const auto& feature: enabled_) {
       tracker.trackField(nullptr, feature);
     }
   }
 
-private:
+ private:
   kj::HashSet<GPUFeatureName> enabled_;
   bool has(kj::String name);
   kj::Array<kj::StringPtr> keys();
 };
 
-} // namespace workerd::api::gpu
+}  // namespace workerd::api::gpu

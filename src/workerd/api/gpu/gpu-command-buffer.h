@@ -4,21 +4,22 @@
 
 #pragma once
 
-#include <webgpu/webgpu_cpp.h>
 #include <workerd/jsg/jsg.h>
+
+#include <webgpu/webgpu_cpp.h>
 
 namespace workerd::api::gpu {
 
-class GPUCommandBuffer : public jsg::Object {
-public:
+class GPUCommandBuffer: public jsg::Object {
+ public:
   // Implicit cast operator to Dawn GPU object
   inline operator const wgpu::CommandBuffer&() const {
     return cmd_buf_;
   }
-  explicit GPUCommandBuffer(wgpu::CommandBuffer b) : cmd_buf_(kj::mv(b)){};
+  explicit GPUCommandBuffer(wgpu::CommandBuffer b): cmd_buf_(kj::mv(b)) {};
   JSG_RESOURCE_TYPE(GPUCommandBuffer) {}
 
-private:
+ private:
   wgpu::CommandBuffer cmd_buf_;
 };
 
@@ -28,4 +29,4 @@ struct GPUCommandBufferDescriptor {
   JSG_STRUCT(label);
 };
 
-} // namespace workerd::api::gpu
+}  // namespace workerd::api::gpu

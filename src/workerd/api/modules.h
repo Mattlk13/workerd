@@ -5,7 +5,6 @@
 #pragma once
 
 #include <workerd/api/node/node.h>
-#include <workerd/api/unsafe.h>
 #include <workerd/api/pyodide/pyodide.h>
 #include <workerd/api/rtti.h>
 #include <workerd/api/sockets.h>
@@ -13,6 +12,7 @@
 #include <workerd/api/worker-rpc.h>
 #include <workerd/io/worker.h>
 #include <workerd/jsg/modules-new.h>
+
 #include <cloudflare/cloudflare.capnp.h>
 
 namespace workerd::api {
@@ -20,9 +20,6 @@ namespace workerd::api {
 template <class Registry>
 void registerModules(Registry& registry, auto featureFlags) {
   node::registerNodeJsCompatModules(registry, featureFlags);
-  if (featureFlags.getPythonWorkers()) {
-    pyodide::registerPyodideModules(registry, featureFlags);
-  }
   registerUnsafeModules(registry, featureFlags);
   if (featureFlags.getRttiApi()) {
     registerRTTIModule(registry);
@@ -45,11 +42,6 @@ void registerBuiltinModules(jsg::modules::ModuleRegistry::Builder& builder, auto
   builder.add(getInternalUnsafeModuleBundle<TypeWrapper>(featureFlags));
   if (featureFlags.getUnsafeModule()) {
     builder.add(getExternalUnsafeModuleBundle<TypeWrapper>(featureFlags));
-  }
-
-  if (featureFlags.getPythonWorkers()) {
-    builder.add(pyodide::getExternalPyodideModuleBundle(featureFlags));
-    builder.add(pyodide::getInternalPyodideModuleBundle(featureFlags));
   }
 
   if (featureFlags.getRttiApi()) {

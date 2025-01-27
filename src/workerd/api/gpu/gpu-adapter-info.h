@@ -4,13 +4,14 @@
 
 #pragma once
 
-#include <webgpu/webgpu_cpp.h>
 #include <workerd/jsg/jsg.h>
+
+#include <webgpu/webgpu_cpp.h>
 
 namespace workerd::api::gpu {
 
-class GPUAdapterInfo : public jsg::Object {
-public:
+class GPUAdapterInfo: public jsg::Object {
+ public:
   explicit GPUAdapterInfo(wgpu::AdapterInfo);
   JSG_RESOURCE_TYPE(GPUAdapterInfo) {
     JSG_READONLY_PROTOTYPE_PROPERTY(vendor, getVendor);
@@ -26,7 +27,7 @@ public:
     tracker.trackField("description", description_);
   }
 
-private:
+ private:
   kj::String vendor_;
   kj::String architecture_;
   kj::String device_;
@@ -45,4 +46,4 @@ private:
   };
 };
 
-} // namespace workerd::api::gpu
+}  // namespace workerd::api::gpu

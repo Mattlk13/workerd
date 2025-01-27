@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <workerd/jsg/jsg.h>
 #include <workerd/io/compatibility-date.capnp.h>
+#include <workerd/jsg/jsg.h>
 
 namespace workerd::api {
 
@@ -13,7 +13,8 @@ class ReadableStream;
 
 // An implementation of the Web Platform Standard Blob API
 class Blob: public jsg::Object {
-public:
+ public:
+  Blob(jsg::Lock& js, jsg::BufferSource data, kj::String type);
   Blob(jsg::Lock& js, kj::Array<byte> data, kj::String type);
   Blob(jsg::Ref<Blob> parent, kj::ArrayPtr<const byte> data, kj::String type);
 
@@ -31,16 +32,20 @@ public:
 
   typedef kj::Array<kj::OneOf<kj::Array<const byte>, kj::String, jsg::Ref<Blob>>> Bits;
 
-  static jsg::Ref<Blob> constructor(jsg::Lock& js, jsg::Optional<Bits> bits,
-                                    jsg::Optional<Options> options);
+  static jsg::Ref<Blob> constructor(
+      jsg::Lock& js, jsg::Optional<Bits> bits, jsg::Optional<Options> options);
 
-  int getSize() const { return data.size(); }
-  kj::StringPtr getType() const { return type; }
+  int getSize() const {
+    return data.size();
+  }
+  kj::StringPtr getType() const {
+    return type;
+  }
 
-  jsg::Ref<Blob> slice(jsg::Optional<int> start, jsg::Optional<int> end,
-                        jsg::Optional<kj::String> type);
+  jsg::Ref<Blob> slice(
+      jsg::Optional<int> start, jsg::Optional<int> end, jsg::Optional<kj::String> type);
 
-  jsg::Promise<kj::Array<kj::byte>> arrayBuffer(jsg::Lock& js);
+  jsg::Promise<jsg::BufferSource> arrayBuffer(jsg::Lock& js);
   jsg::Promise<jsg::BufferSource> bytes(jsg::Lock& js);
   jsg::Promise<kj::String> text(jsg::Lock& js);
   jsg::Ref<ReadableStream> stream();
@@ -62,6 +67,7 @@ public:
 
     JSG_TS_OVERRIDE({
       bytes(): Promise<Uint8Array>;
+      arrayBuffer(): Promise<ArrayBuffer>;
     });
   }
 
@@ -80,7 +86,7 @@ public:
     tracker.trackField("type", type);
   }
 
-private:
+ private:
   Blob(kj::Array<byte> data, kj::String type);
 
   // Using a jsg::BufferSource to store the ownData allows the associated isolate
@@ -110,14 +116,17 @@ private:
 
 // An implementation of the Web Platform Standard File API
 class File: public Blob {
-public:
+ public:
   // This constructor variation is used when a File is created outside of the isolate
   // lock. This is currently only the case when parsing FormData outside of running
   // JavaScript (such as in the internal fiddle service).
   File(kj::Array<byte> data, kj::String name, kj::String type, double lastModified);
   File(jsg::Lock& js, kj::Array<byte> data, kj::String name, kj::String type, double lastModified);
-  File(jsg::Ref<Blob> parent, kj::ArrayPtr<const byte> data,
-       kj::String name, kj::String type, double lastModified);
+  File(jsg::Ref<Blob> parent,
+      kj::ArrayPtr<const byte> data,
+      kj::String name,
+      kj::String type,
+      double lastModified);
 
   struct Options {
     jsg::Optional<kj::String> type;
@@ -127,11 +136,15 @@ public:
     JSG_STRUCT(type, lastModified, endings);
   };
 
-  static jsg::Ref<File> constructor(jsg::Lock& js, jsg::Optional<Bits> bits,
-      kj::String name, jsg::Optional<Options> options);
+  static jsg::Ref<File> constructor(
+      jsg::Lock& js, jsg::Optional<Bits> bits, kj::String name, jsg::Optional<Options> options);
 
-  kj::StringPtr getName() { return name; }
-  double getLastModified() { return lastModified; }
+  kj::StringPtr getName() {
+    return name;
+  }
+  double getLastModified() {
+    return lastModified;
+  }
 
   JSG_RESOURCE_TYPE(File, CompatibilityFlags::Reader flags) {
     JSG_INHERIT(Blob);
@@ -148,15 +161,11 @@ public:
     tracker.trackField("name", name);
   }
 
-private:
+ private:
   kj::String name;
   double lastModified;
 };
 
-#define EW_BLOB_ISOLATE_TYPES \
-  api::Blob,                  \
-  api::Blob::Options,         \
-  api::File,                  \
-  api::File::Options
+#define EW_BLOB_ISOLATE_TYPES api::Blob, api::Blob::Options, api::File, api::File::Options
 
 }  // namespace workerd::api

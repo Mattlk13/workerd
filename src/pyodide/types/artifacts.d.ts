@@ -1,20 +1,28 @@
 declare namespace ArtifactBundler {
+  const constructor: {
+    getSnapshotImports(): string[];
+    filterPythonScriptImportsJs(
+      fileNames: string[],
+      imports: string[]
+    ): string[];
+    parsePythonScriptImports(fileNames: string[]): string[];
+  };
+
   type MemorySnapshotResult = {
     snapshot: Uint8Array;
-    importedModulesList: Array<string>;
-  }
+    importedModulesList: string[];
+  };
 
   const hasMemorySnapshot: () => boolean;
   const isEwValidating: () => boolean;
-  const isEnabled: () => boolean;
-  const uploadMemorySnapshot: (toUpload: Uint8Array) => Promise<boolean>;
   const readMemorySnapshot: (
     offset: number,
-    buf: Uint32Array | Uint8Array,
+    buf: Uint32Array | Uint8Array
   ) => void;
   const getMemorySnapshotSize: () => number;
   const disposeMemorySnapshot: () => void;
   const storeMemorySnapshot: (snap: MemorySnapshotResult) => void;
+  const getPackage: (path: string) => Reader | null;
 }
 
 export default ArtifactBundler;

@@ -1,63 +1,57 @@
-load("//:build/wd_test.bzl", "wd_test")
-
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+load("//:build/pyodide_bucket.bzl", "PYODIDE_IMPORTS_TO_TEST")
+load("//src/workerd/server/tests/python:import_tests.bzl", "gen_import_tests")
 load("//src/workerd/server/tests/python:py_wd_test.bzl", "py_wd_test")
 
-load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
-
-# pyodide-dev.capnp.bin represents a custom pyodide version "dev" that is generated
+# pyodide_dev.capnp.bin represents a custom pyodide version "dev" that is generated
 # at build time using the latest contents of the src/pyodide directory.
 # This is used to run tests to ensure that they are always run against the latest build of
 # the Pyodide bundle.
 copy_file(
-    name = "pyodide-dev.capnp.bin@rule",
+    name = "pyodide_dev.capnp.bin@rule",
     src = "//src/pyodide:pyodide.capnp.bin",
-    out = "pyodide-bundle-cache/pyodide-dev.capnp.bin"
+    out = "pyodide-bundle-cache/pyodide_dev.capnp.bin",
+    visibility = ["//visibility:public"],
 )
+
+py_wd_test("hello")
+
+py_wd_test("env-param")
 
 py_wd_test(
-    src = "hello/hello.wd-test",
-    args = ["--experimental"],
-    data = glob(
-        [
-            "hello/*",
-        ],
-        exclude = ["**/*.wd-test"],
-    ),
+    "asgi",
+    skip_python_flags = ["0.27.1"],
 )
+
+py_wd_test("random")
+
+py_wd_test("subdirectory")
 
 py_wd_test(
-    src = "env-param/env.wd-test",
-    args = ["--experimental"],
-    data = glob(
-        [
-            "env-param/*",
-        ],
-        exclude = ["**/*.wd-test"],
-    ),
+    "sdk",
+    tags = [
+        # TODO(someday): Fix asan failure for this, see https://github.com/cloudflare/workerd/pull/3140#discussion_r1858273318
+        "no-asan",
+    ],
 )
 
-py_wd_test(
-    src = "random/random.wd-test",
-    args = ["--experimental"],
-    data = glob(
-        [
-            "random/*",
-        ],
-        exclude = ["**/*.wd-test"],
-    ),
-)
+py_wd_test("seek-metadatafs")
 
-py_wd_test(
-    src = "subdirectory/subdirectory.wd-test",
-    args = ["--experimental"],
-    data = glob(
-        [
-            "subdirectory/**",
+gen_import_tests(
+    PYODIDE_IMPORTS_TO_TEST,
+    # TODO: Micropip version mismatch for 0.27.0
+    pkg_skip_versions = {
+        "micropip": [
+            "0.27.1",
         ],
-        exclude = ["**/*.wd-test"],
-    ),
+        "langchain-core": [
+            "0.27.1",
+        ],
+        "langchain_openai": [
+            "0.27.1",
+        ],
+        "langsmith": [
+            "0.27.1",
+        ],
+    },
 )
-
-load("//src/workerd/server/tests/python:import_tests.bzl", "gen_import_tests")
-load("//:build/pyodide_bucket.bzl", "PYODIDE_IMPORTS_TO_TEST")
-gen_import_tests(PYODIDE_IMPORTS_TO_TEST)

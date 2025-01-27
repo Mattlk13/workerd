@@ -12,9 +12,15 @@ export class WorkerEntrypoint {
   public env: unknown;
 }
 
+export class WorkflowEntrypoint {
+  public constructor(ctx: unknown, env: unknown);
+
+  public ctx: unknown;
+  public env: unknown;
+}
+
 export class RpcStub {
   public constructor(server: object);
 }
 
-export class RpcTarget {
-}
+export class RpcTarget {}

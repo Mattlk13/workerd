@@ -1,12 +1,13 @@
 #pragma once
 
-#include <workerd/jsg/jsg.h>
 #include "basics.h"
+
+#include <workerd/jsg/jsg.h>
 
 namespace workerd::api {
 
 class ErrorEvent: public Event {
-public:
+ public:
   struct ErrorEventInit {
     jsg::Optional<kj::String> message;
     jsg::Optional<kj::String> filename;
@@ -19,9 +20,7 @@ public:
   ErrorEvent(kj::String type, ErrorEventInit init);
 
   static jsg::Ref<ErrorEvent> constructor(
-      jsg::Lock& js,
-      kj::String type,
-      jsg::Optional<ErrorEventInit> init);
+      jsg::Lock& js, kj::String type, jsg::Optional<ErrorEventInit> init);
 
   kj::StringPtr getFilename();
   kj::StringPtr getMessage();
@@ -43,14 +42,12 @@ public:
 
   void visitForMemoryInfo(jsg::MemoryTracker& tracker) const;
 
-private:
+ private:
   ErrorEventInit init;
 
   void visitForGc(jsg::GcVisitor& visitor);
 };
 
-#define EW_EVENTS_ISOLATE_TYPES                                                \
-  api::ErrorEvent,                                                             \
-  api::ErrorEvent::ErrorEventInit
+#define EW_EVENTS_ISOLATE_TYPES api::ErrorEvent, api::ErrorEvent::ErrorEventInit
 
 }  // namespace workerd::api

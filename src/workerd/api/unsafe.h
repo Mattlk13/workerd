@@ -1,15 +1,15 @@
 #pragma once
 
+#include <workerd/io/io-context.h>
 #include <workerd/jsg/jsg.h>
 #include <workerd/jsg/modules-new.h>
 #include <workerd/jsg/url.h>
-#include <workerd/io/io-context.h>
 
 namespace workerd::api {
 
 // A special binding object that allows for dynamic evaluation.
 class UnsafeEval: public jsg::Object {
-public:
+ public:
   UnsafeEval() = default;
   UnsafeEval(jsg::Lock&, const jsg::Url&) {}
 
@@ -33,8 +33,7 @@ public:
   // const fn = env.unsafe.newFunction('return m', 'foo', 'm');
   // console.log(fn(1));  // prints 1
   //
-  UnsafeEvalFunction newFunction(
-      jsg::Lock& js,
+  UnsafeEvalFunction newFunction(jsg::Lock& js,
       jsg::JsString script,
       jsg::Optional<kj::String> name,
       jsg::Arguments<jsg::JsRef<jsg::JsString>> args,
@@ -46,8 +45,7 @@ public:
   // and will appear in stack traces for any errors thrown. An optional list of
   // arguments names can be passed in. If your function needs to use the await
   // key, use this instead of newFunction.
-  UnsafeEvalFunction newAsyncFunction(
-      jsg::Lock& js,
+  UnsafeEvalFunction newAsyncFunction(jsg::Lock& js,
       jsg::JsString script,
       jsg::Optional<kj::String> name,
       jsg::Arguments<jsg::JsRef<jsg::JsString>> args,
@@ -64,7 +62,7 @@ public:
 };
 
 class UnsafeModule: public jsg::Object {
-public:
+ public:
   UnsafeModule() = default;
   UnsafeModule(jsg::Lock&, const jsg::Url&) {}
   jsg::Promise<void> abortAllDurableObjects(jsg::Lock& js);
@@ -76,18 +74,18 @@ public:
 
 template <class Registry>
 void registerUnsafeModule(Registry& registry) {
-  registry.template addBuiltinModule<UnsafeModule>("workerd:unsafe",
-    workerd::jsg::ModuleRegistry::Type::BUILTIN);
-  registry.template addBuiltinModule<UnsafeEval>("workerd:unsafe-eval",
-    workerd::jsg::ModuleRegistry::Type::BUILTIN);
+  registry.template addBuiltinModule<UnsafeModule>(
+      "workerd:unsafe", workerd::jsg::ModuleRegistry::Type::BUILTIN);
+  registry.template addBuiltinModule<UnsafeEval>(
+      "workerd:unsafe-eval", workerd::jsg::ModuleRegistry::Type::BUILTIN);
 }
 
-#define EW_UNSAFE_ISOLATE_TYPES api::UnsafeEval, \
-  api::UnsafeModule
+#define EW_UNSAFE_ISOLATE_TYPES api::UnsafeEval, api::UnsafeModule
 
-template <class Registry> void registerUnsafeModules(Registry& registry, auto featureFlags) {
-  registry.template addBuiltinModule<UnsafeEval>("internal:unsafe-eval",
-                                                 workerd::jsg::ModuleRegistry::Type::INTERNAL);
+template <class Registry>
+void registerUnsafeModules(Registry& registry, auto featureFlags) {
+  registry.template addBuiltinModule<UnsafeEval>(
+      "internal:unsafe-eval", workerd::jsg::ModuleRegistry::Type::INTERNAL);
 }
 
 template <typename TypeWrapper>
@@ -110,4 +108,4 @@ kj::Own<jsg::modules::ModuleBundle> getExternalUnsafeModuleBundle(auto featureFl
   builder.addObject<UnsafeModule, TypeWrapper>(kUnsafeSpecifier);
   return builder.finish();
 }
-} // namespace workerd::api
+}  // namespace workerd::api

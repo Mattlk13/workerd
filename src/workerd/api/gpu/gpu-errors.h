@@ -5,14 +5,16 @@
 #pragma once
 
 #include "gpu-utils.h"
-#include <webgpu/webgpu_cpp.h>
+
 #include <workerd/jsg/jsg.h>
+
+#include <webgpu/webgpu_cpp.h>
 
 namespace workerd::api::gpu {
 
-class GPUError : public jsg::Object {
-public:
-  explicit GPUError(kj::String m) : message_(kj::mv(m)){};
+class GPUError: public jsg::Object {
+ public:
+  explicit GPUError(kj::String m): message_(kj::mv(m)) {};
   JSG_RESOURCE_TYPE(GPUError) {
     JSG_READONLY_PROTOTYPE_PROPERTY(message, getMessage);
   }
@@ -25,38 +27,39 @@ public:
     tracker.trackField("message", message_);
   }
 
-private:
+ private:
   kj::String message_;
 };
 
-class GPUOutOfMemoryError : public GPUError {
-public:
+class GPUOutOfMemoryError: public GPUError {
+ public:
   using GPUError::GPUError;
   JSG_RESOURCE_TYPE(GPUOutOfMemoryError) {
     JSG_INHERIT(GPUError);
   }
 };
 
-class GPUValidationError : public GPUError {
-public:
+class GPUValidationError: public GPUError {
+ public:
   using GPUError::GPUError;
   JSG_RESOURCE_TYPE(GPUValidationError) {
     JSG_INHERIT(GPUError);
   }
 };
 
-class GPUInternalError : public GPUError {
-public:
+class GPUInternalError: public GPUError {
+ public:
   using GPUError::GPUError;
   JSG_RESOURCE_TYPE(GPUInternalError) {
     JSG_INHERIT(GPUError);
   }
 };
 
-class GPUDeviceLostInfo : public jsg::Object {
-public:
+class GPUDeviceLostInfo: public jsg::Object {
+ public:
   explicit GPUDeviceLostInfo(GPUDeviceLostReason r, kj::String m)
-      : reason_(kj::mv(r)), message_(kj::mv(m)){};
+      : reason_(kj::mv(r)),
+        message_(kj::mv(m)) {};
   JSG_RESOURCE_TYPE(GPUDeviceLostInfo) {
     JSG_READONLY_PROTOTYPE_PROPERTY(message, getMessage);
     JSG_READONLY_PROTOTYPE_PROPERTY(reason, getReason);
@@ -67,7 +70,7 @@ public:
     tracker.trackField("reason", reason_);
   }
 
-private:
+ private:
   GPUDeviceLostReason reason_;
   kj::String message_;
   kj::StringPtr getMessage() {
@@ -78,4 +81,4 @@ private:
   }
 };
 
-} // namespace workerd::api::gpu
+}  // namespace workerd::api::gpu

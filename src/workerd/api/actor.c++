@@ -3,99 +3,115 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 #include "actor.h"
-#include "util.h"
+
 #include <workerd/io/features.h>
-#include <kj/encoding.h>
-#include <kj/compat/http.h>
+
 #include <capnp/compat/byte-stream.h>
 #include <capnp/compat/http-over-capnp.h>
-#include <capnp/schema.h>
 #include <capnp/message.h>
+#include <capnp/schema.h>
+#include <kj/compat/http.h>
+#include <kj/encoding.h>
 
 namespace workerd::api {
 
 class LocalActorOutgoingFactory final: public Fetcher::OutgoingFactory {
-public:
+ public:
   LocalActorOutgoingFactory(uint channelId, kj::String actorId)
-    : channelId(channelId),
-      actorId(kj::mv(actorId)) {}
+      : channelId(channelId),
+        actorId(kj::mv(actorId)) {}
 
   kj::Own<WorkerInterface> newSingleUseClient(kj::Maybe<kj::String> cfStr) override {
     auto& context = IoContext::current();
 
     return context.getMetrics().wrapActorSubrequestClient(context.getSubrequest(
-        [&](SpanBuilder& span, IoChannelFactory& ioChannelFactory) {
-      if (span.isObserved()) {
-        span.setTag("actor_id"_kjc, kj::str(actorId));
+        [&](TraceContext& tracing, IoChannelFactory& ioChannelFactory) {
+      if (tracing.span.isObserved()) {
+        tracing.span.setTag("actor_id"_kjc, kj::str(actorId));
       }
 
       // Lazily initialize actorChannel
       if (actorChannel == kj::none) {
-        actorChannel = context.getColoLocalActorChannel(channelId, actorId, span);
+        actorChannel = context.getColoLocalActorChannel(channelId, actorId, tracing.span);
       }
 
-      return KJ_REQUIRE_NONNULL(actorChannel)->startRequest({
-        .cfBlobJson = kj::mv(cfStr),
-        .parentSpan = span
-      });
-    }, {
-      .inHouse = true,
-      .wrapMetrics = true,
-      .operationName = kj::ConstString("actor_subrequest"_kjc)
-    }));
+      return KJ_REQUIRE_NONNULL(actorChannel)
+          ->startRequest({.cfBlobJson = kj::mv(cfStr), .tracing = tracing});
+    },
+        {.inHouse = true,
+          .wrapMetrics = true,
+          .operationName = kj::ConstString("durable_object_subrequest"_kjc)}));
   }
 
-private:
+ private:
   uint channelId;
   kj::String actorId;
   kj::Maybe<kj::Own<IoChannelFactory::ActorChannel>> actorChannel;
 };
 
 class GlobalActorOutgoingFactory final: public Fetcher::OutgoingFactory {
-public:
-  GlobalActorOutgoingFactory(
-      uint channelId,
+ public:
+  GlobalActorOutgoingFactory(uint channelId,
       jsg::Ref<DurableObjectId> id,
       kj::Maybe<kj::String> locationHint,
-      ActorGetMode mode)
-    : channelId(channelId),
-      id(kj::mv(id)),
-      locationHint(kj::mv(locationHint)),
-      mode(mode) {}
+      ActorGetMode mode,
+      bool enableReplicaRouting)
+      : channelId(channelId),
+        id(kj::mv(id)),
+        locationHint(kj::mv(locationHint)),
+        mode(mode),
+        enableReplicaRouting(enableReplicaRouting) {}
 
   kj::Own<WorkerInterface> newSingleUseClient(kj::Maybe<kj::String> cfStr) override {
     auto& context = IoContext::current();
 
     return context.getMetrics().wrapActorSubrequestClient(context.getSubrequest(
-        [&](SpanBuilder& span, IoChannelFactory& ioChannelFactory) {
-      if (span.isObserved()) {
-        span.setTag("actor_id"_kjc, id->toString());
+        [&](TraceContext& tracing, IoChannelFactory& ioChannelFactory) {
+      if (tracing.span.isObserved()) {
+        tracing.span.setTag("actor_id"_kjc, id->toString());
       }
 
       // Lazily initialize actorChannel
       if (actorChannel == kj::none) {
-        actorChannel = context.getGlobalActorChannel(channelId, id->getInner(), kj::mv(locationHint),
-            mode, span);
+        actorChannel = context.getGlobalActorChannel(channelId, id->getInner(),
+            kj::mv(locationHint), mode, enableReplicaRouting, tracing.span);
       }
 
-      return KJ_REQUIRE_NONNULL(actorChannel)->startRequest({
-        .cfBlobJson = kj::mv(cfStr),
-        .parentSpan = span
-      });
-    }, {
-      .inHouse = true,
-      .wrapMetrics = true,
-      .operationName = kj::ConstString("actor_subrequest"_kjc)
-    }));
+      return KJ_REQUIRE_NONNULL(actorChannel)
+          ->startRequest({.cfBlobJson = kj::mv(cfStr), .tracing = tracing});
+    },
+        {.inHouse = true,
+          .wrapMetrics = true,
+          .operationName = kj::ConstString("durable_object_subrequest"_kjc)}));
   }
 
-private:
+ private:
   uint channelId;
   jsg::Ref<DurableObjectId> id;
   kj::Maybe<kj::String> locationHint;
   ActorGetMode mode;
+  bool enableReplicaRouting;
   kj::Maybe<kj::Own<IoChannelFactory::ActorChannel>> actorChannel;
 };
+
+kj::Own<WorkerInterface> ReplicaActorOutgoingFactory::newSingleUseClient(
+    kj::Maybe<kj::String> cfStr) {
+  auto& context = IoContext::current();
+
+  return context.getMetrics().wrapActorSubrequestClient(context.getSubrequest(
+      [&](TraceContext& tracing, IoChannelFactory& ioChannelFactory) {
+    if (tracing.span.isObserved()) {
+      tracing.span.setTag("actor_id"_kjc, kj::heapString(actorId));
+    }
+
+    // Unlike in `GlobalActorOutgoingFactory`, we do not create this lazily, since our channel was
+    // already open prior to this DO starting up.
+    return actorChannel->startRequest({.cfBlobJson = kj::mv(cfStr), .tracing = tracing});
+  },
+      {.inHouse = true,
+        .wrapMetrics = true,
+        .operationName = kj::ConstString("durable_object_subrequest"_kjc)}));
+}
 
 jsg::Ref<Fetcher> ColoLocalActorNamespace::get(kj::String actorId) {
   JSG_REQUIRE(actorId.size() > 0 && actorId.size() <= 2048, TypeError,
@@ -103,8 +119,8 @@ jsg::Ref<Fetcher> ColoLocalActorNamespace::get(kj::String actorId) {
 
   auto& context = IoContext::current();
 
-  kj::Own<api::Fetcher::OutgoingFactory> factory = kj::heap<LocalActorOutgoingFactory>(
-      channel, kj::mv(actorId));
+  kj::Own<api::Fetcher::OutgoingFactory> factory =
+      kj::heap<LocalActorOutgoingFactory>(channel, kj::mv(actorId));
   auto outgoingFactory = context.addObject(kj::mv(factory));
 
   bool isInHouse = true;
@@ -132,21 +148,16 @@ jsg::Ref<DurableObjectId> DurableObjectNamespace::idFromString(kj::String id) {
 }
 
 jsg::Ref<DurableObject> DurableObjectNamespace::get(
-    jsg::Lock& js,
-    jsg::Ref<DurableObjectId> id,
-    jsg::Optional<GetDurableObjectOptions> options) {
+    jsg::Lock& js, jsg::Ref<DurableObjectId> id, jsg::Optional<GetDurableObjectOptions> options) {
   return getImpl(js, ActorGetMode::GET_OR_CREATE, kj::mv(id), kj::mv(options));
 }
 
 jsg::Ref<DurableObject> DurableObjectNamespace::getExisting(
-    jsg::Lock& js,
-    jsg::Ref<DurableObjectId> id,
-    jsg::Optional<GetDurableObjectOptions> options) {
+    jsg::Lock& js, jsg::Ref<DurableObjectId> id, jsg::Optional<GetDurableObjectOptions> options) {
   return getImpl(js, ActorGetMode::GET_EXISTING, kj::mv(id), kj::mv(options));
 }
 
-jsg::Ref<DurableObject> DurableObjectNamespace::getImpl(
-    jsg::Lock& js,
+jsg::Ref<DurableObject> DurableObjectNamespace::getImpl(jsg::Lock& js,
     ActorGetMode mode,
     jsg::Ref<DurableObjectId> id,
     jsg::Optional<GetDurableObjectOptions> options) {
@@ -159,8 +170,10 @@ jsg::Ref<DurableObject> DurableObjectNamespace::getImpl(
     locationHint = kj::mv(o.locationHint);
   }
 
-  auto outgoingFactory = context.addObject<Fetcher::OutgoingFactory>(
-      kj::heap<GlobalActorOutgoingFactory>(channel, id.addRef(), kj::mv(locationHint), mode));
+  bool enableReplicaRouting = FeatureFlags::get(js).getReplicaRouting();
+  auto outgoingFactory =
+      context.addObject<Fetcher::OutgoingFactory>(kj::heap<GlobalActorOutgoingFactory>(
+          channel, id.addRef(), kj::mv(locationHint), mode, enableReplicaRouting));
   auto requiresHost = FeatureFlags::get(js).getDurableObjectFetchRequiresSchemeAuthority()
       ? Fetcher::RequiresHostAndProtocol::YES
       : Fetcher::RequiresHostAndProtocol::NO;
@@ -168,8 +181,8 @@ jsg::Ref<DurableObject> DurableObjectNamespace::getImpl(
 }
 
 jsg::Ref<DurableObjectNamespace> DurableObjectNamespace::jurisdiction(kj::String jurisdiction) {
-  return jsg::alloc<api::DurableObjectNamespace>(channel,
-      idFactory->cloneWithJurisdiction(jurisdiction));
+  return jsg::alloc<api::DurableObjectNamespace>(
+      channel, idFactory->cloneWithJurisdiction(jurisdiction));
 }
 
 }  // namespace workerd::api

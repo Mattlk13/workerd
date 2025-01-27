@@ -2,20 +2,22 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 #include "crypto.h"
+
 #include <workerd/api/crypto/digest.h>
 #include <workerd/api/crypto/impl.h>
 #include <workerd/api/crypto/kdf.h>
 #include <workerd/api/crypto/prime.h>
-#include <workerd/jsg/jsg.h>
 #include <workerd/api/crypto/spkac.h>
+#include <workerd/jsg/jsg.h>
 
 namespace workerd::api::node {
 
-kj::Array<kj::byte> CryptoImpl::getHkdf(kj::String hash,
-                                        kj::Array<const kj::byte> key,
-                                        kj::Array<const kj::byte> salt,
-                                        kj::Array<const kj::byte> info,
-                                        uint32_t length) {
+jsg::BufferSource CryptoImpl::getHkdf(jsg::Lock& js,
+    kj::String hash,
+    kj::Array<const kj::byte> key,
+    kj::Array<const kj::byte> salt,
+    kj::Array<const kj::byte> info,
+    uint32_t length) {
   // The Node.js version of the HKDF is a bit different from the Web Crypto API
   // version. For one, the length here specifies the number of bytes, whereas
   // in Web Crypto the length is expressed in the number of bits. Second, the
@@ -39,18 +41,18 @@ kj::Array<kj::byte> CryptoImpl::getHkdf(kj::String hash,
   // practical sense is that the maximum value of length is 255 * hash size for
   // the specific hash algorithm specified.
   static constexpr size_t kMaxDigestMultiplier = 255;
-  JSG_REQUIRE(length <= EVP_MD_size(digest) * kMaxDigestMultiplier, RangeError,
-              "Invalid Hkdf key length");
+  JSG_REQUIRE(
+      length <= EVP_MD_size(digest) * kMaxDigestMultiplier, RangeError, "Invalid Hkdf key length");
 
-  return JSG_REQUIRE_NONNULL(hkdf(length, digest, key, salt, info), Error, "Hkdf failed");
+  return JSG_REQUIRE_NONNULL(hkdf(js, length, digest, key, salt, info), Error, "Hkdf failed");
 }
 
-kj::Array<kj::byte> CryptoImpl::getPbkdf(jsg::Lock& js,
-                                         kj::Array<const kj::byte> password,
-                                         kj::Array<const kj::byte> salt,
-                                         uint32_t num_iterations,
-                                         uint32_t keylen,
-                                         kj::String name) {
+jsg::BufferSource CryptoImpl::getPbkdf(jsg::Lock& js,
+    kj::Array<const kj::byte> password,
+    kj::Array<const kj::byte> salt,
+    uint32_t num_iterations,
+    uint32_t keylen,
+    kj::String name) {
   // The Node.js version of the PBKDF2 is a bit different from the Web Crypto API.
   // For one, the Node.js implementation allows for a broader range of possible
   // digest algorithms whereas the Web Crypto API only allows for a few specific ones.
@@ -59,7 +61,7 @@ kj::Array<kj::byte> CryptoImpl::getPbkdf(jsg::Lock& js,
   ClearErrorOnReturn clearErrorOnReturn;
   const EVP_MD* digest = EVP_get_digestbyname(name.begin());
   JSG_REQUIRE(digest != nullptr, TypeError, "Invalid Pbkdf2 digest: ", name,
-              internalDescribeOpensslErrors());
+      internalDescribeOpensslErrors());
 
   JSG_REQUIRE(password.size() <= INT32_MAX, RangeError, "Pbkdf2 failed: password is too large");
   JSG_REQUIRE(salt.size() <= INT32_MAX, RangeError, "Pbkdf2 failed: salt is too large");
@@ -68,42 +70,46 @@ kj::Array<kj::byte> CryptoImpl::getPbkdf(jsg::Lock& js,
   checkPbkdfLimits(js, num_iterations);
 
   // Both pass and salt may be zero length here.
-  return JSG_REQUIRE_NONNULL(pbkdf2(keylen, num_iterations, digest, password, salt),
-      Error, "Pbkdf2 failed");
+  return JSG_REQUIRE_NONNULL(
+      pbkdf2(js, keylen, num_iterations, digest, password, salt), Error, "Pbkdf2 failed");
 }
 
-kj::Array<kj::byte> CryptoImpl::getScrypt(jsg::Lock& js,
-                                          kj::Array<const kj::byte> password,
-                                          kj::Array<const kj::byte> salt,
-                                          uint32_t N,
-                                          uint32_t r,
-                                          uint32_t p,
-                                          uint32_t maxmem,
-                                          uint32_t keylen) {
+jsg::BufferSource CryptoImpl::getScrypt(jsg::Lock& js,
+    kj::Array<const kj::byte> password,
+    kj::Array<const kj::byte> salt,
+    uint32_t N,
+    uint32_t r,
+    uint32_t p,
+    uint32_t maxmem,
+    uint32_t keylen) {
   ClearErrorOnReturn clearErrorOnReturn;
   JSG_REQUIRE(password.size() <= INT32_MAX, RangeError, "Scrypt failed: password is too large");
   JSG_REQUIRE(salt.size() <= INT32_MAX, RangeError, "Scrypt failed: salt is too large");
 
-  return JSG_REQUIRE_NONNULL(scrypt(keylen, N, r, p, maxmem, password, salt),
-      Error, "Scrypt failed");
+  return JSG_REQUIRE_NONNULL(
+      scrypt(js, keylen, N, r, p, maxmem, password, salt), Error, "Scrypt failed");
 }
 
 bool CryptoImpl::verifySpkac(kj::Array<const kj::byte> input) {
   return workerd::api::verifySpkac(input);
 }
 
-kj::Maybe<kj::Array<kj::byte>> CryptoImpl::exportPublicKey(kj::Array<const kj::byte> input) {
-  return workerd::api::exportPublicKey(input);
+kj::Maybe<jsg::BufferSource> CryptoImpl::exportPublicKey(
+    jsg::Lock& js, kj::Array<const kj::byte> input) {
+  return workerd::api::exportPublicKey(js, input);
 }
 
-kj::Maybe<kj::Array<kj::byte>> CryptoImpl::exportChallenge(kj::Array<const kj::byte> input) {
-  return workerd::api::exportChallenge(input);
+kj::Maybe<jsg::BufferSource> CryptoImpl::exportChallenge(
+    jsg::Lock& js, kj::Array<const kj::byte> input) {
+  return workerd::api::exportChallenge(js, input);
 }
 
-kj::Array<kj::byte> CryptoImpl::randomPrime(uint32_t size, bool safe,
-                                            jsg::Optional<kj::Array<kj::byte>> add_buf,
-                                            jsg::Optional<kj::Array<kj::byte>> rem_buf) {
-  return workerd::api::randomPrime(size, safe,
+jsg::BufferSource CryptoImpl::randomPrime(jsg::Lock& js,
+    uint32_t size,
+    bool safe,
+    jsg::Optional<kj::Array<kj::byte>> add_buf,
+    jsg::Optional<kj::Array<kj::byte>> rem_buf) {
+  return workerd::api::randomPrime(js, size, safe,
       add_buf.map([](kj::Array<kj::byte>& buf) { return buf.asPtr(); }),
       rem_buf.map([](kj::Array<kj::byte>& buf) { return buf.asPtr(); }));
 }
@@ -114,14 +120,13 @@ bool CryptoImpl::checkPrimeSync(kj::Array<kj::byte> bufferView, uint32_t num_che
 
 // ======================================================================================
 jsg::Ref<CryptoImpl::HmacHandle> CryptoImpl::HmacHandle::constructor(
-    kj::String algorithm,
-    kj::OneOf<kj::Array<kj::byte>, jsg::Ref<CryptoKey>> key) {
+    jsg::Lock& js, kj::String algorithm, kj::OneOf<kj::Array<kj::byte>, jsg::Ref<CryptoKey>> key) {
   KJ_SWITCH_ONEOF(key) {
     KJ_CASE_ONEOF(key_data, kj::Array<kj::byte>) {
-      return jsg::alloc<HmacHandle>(HmacContext(algorithm, key_data.asPtr()));
+      return jsg::alloc<HmacHandle>(HmacContext(js, algorithm, key_data.asPtr()));
     }
     KJ_CASE_ONEOF(key, jsg::Ref<CryptoKey>) {
-      return jsg::alloc<HmacHandle>(HmacContext(algorithm, key->impl.get()));
+      return jsg::alloc<HmacHandle>(HmacContext(js, algorithm, key->impl.get()));
     }
   }
   KJ_UNREACHABLE;
@@ -132,24 +137,24 @@ int CryptoImpl::HmacHandle::update(kj::Array<kj::byte> data) {
   return 1;  // This just always returns 1 no matter what.
 }
 
-kj::ArrayPtr<kj::byte> CryptoImpl::HmacHandle::digest() {
-  return ctx.digest();
+jsg::BufferSource CryptoImpl::HmacHandle::digest(jsg::Lock& js) {
+  return ctx.digest(js);
 }
 
-kj::Array<kj::byte> CryptoImpl::HmacHandle::oneshot(
+jsg::BufferSource CryptoImpl::HmacHandle::oneshot(jsg::Lock& js,
     kj::String algorithm,
     CryptoImpl::HmacHandle::KeyParam key,
     kj::Array<kj::byte> data) {
   KJ_SWITCH_ONEOF(key) {
     KJ_CASE_ONEOF(key_data, kj::Array<kj::byte>) {
-      HmacContext ctx(algorithm, key_data.asPtr());
+      HmacContext ctx(js, algorithm, key_data.asPtr());
       ctx.update(data);
-      return kj::heapArray(ctx.digest());
+      return ctx.digest(js);
     }
     KJ_CASE_ONEOF(key, jsg::Ref<CryptoKey>) {
-      HmacContext ctx(algorithm, key->impl.get());
+      HmacContext ctx(js, algorithm, key->impl.get());
       ctx.update(data);
-      return kj::heapArray(ctx.digest());
+      return ctx.digest(js);
     }
   }
   KJ_UNREACHABLE;
@@ -170,25 +175,24 @@ int CryptoImpl::HashHandle::update(kj::Array<kj::byte> data) {
   return 1;
 }
 
-kj::ArrayPtr<kj::byte> CryptoImpl::HashHandle::digest() {
-  return ctx.digest();
+jsg::BufferSource CryptoImpl::HashHandle::digest(jsg::Lock& js) {
+  return ctx.digest(js);
 }
 
-jsg::Ref<CryptoImpl::HashHandle> CryptoImpl::HashHandle::copy(kj::Maybe<uint32_t> xofLen) {
-  return jsg::alloc<HashHandle>(ctx.clone(kj::mv(xofLen)));
+jsg::Ref<CryptoImpl::HashHandle> CryptoImpl::HashHandle::copy(
+    jsg::Lock& js, kj::Maybe<uint32_t> xofLen) {
+  return jsg::alloc<HashHandle>(ctx.clone(js, kj::mv(xofLen)));
 }
 
 void CryptoImpl::HashHandle::visitForMemoryInfo(jsg::MemoryTracker& tracker) const {
   tracker.trackFieldWithSize("digest", ctx.size());
 }
 
-kj::Array<kj::byte> CryptoImpl::HashHandle::oneshot(
-    kj::String algorithm,
-    kj::Array<kj::byte> data,
-    kj::Maybe<uint32_t> xofLen) {
+jsg::BufferSource CryptoImpl::HashHandle::oneshot(
+    jsg::Lock& js, kj::String algorithm, kj::Array<kj::byte> data, kj::Maybe<uint32_t> xofLen) {
   HashContext ctx(algorithm, xofLen);
   ctx.update(data);
-  return kj::heapArray(ctx.digest());
+  return ctx.digest(js);
 }
 
 // ======================================================================================
@@ -199,12 +203,13 @@ jsg::Ref<CryptoImpl::DiffieHellmanHandle> CryptoImpl::DiffieHellmanGroupHandle(k
 }
 
 jsg::Ref<CryptoImpl::DiffieHellmanHandle> CryptoImpl::DiffieHellmanHandle::constructor(
-    jsg::Lock &js, kj::OneOf<kj::Array<kj::byte>, int> sizeOrKey,
+    jsg::Lock& js,
+    kj::OneOf<kj::Array<kj::byte>, int> sizeOrKey,
     kj::OneOf<kj::Array<kj::byte>, int> generator) {
   return jsg::alloc<DiffieHellmanHandle>(DiffieHellman(sizeOrKey, generator));
 }
 
-CryptoImpl::DiffieHellmanHandle::DiffieHellmanHandle(DiffieHellman dh) : dh(kj::mv(dh)) {
+CryptoImpl::DiffieHellmanHandle::DiffieHellmanHandle(DiffieHellman dh): dh(kj::mv(dh)) {
   verifyError = JSG_REQUIRE_NONNULL(this->dh.check(), Error, "DiffieHellman init failed");
 };
 
@@ -216,30 +221,33 @@ void CryptoImpl::DiffieHellmanHandle::setPublicKey(kj::Array<kj::byte> key) {
   dh.setPublicKey(key);
 }
 
-kj::Array<kj::byte> CryptoImpl::DiffieHellmanHandle::getPublicKey() {
-  return dh.getPublicKey();
+jsg::BufferSource CryptoImpl::DiffieHellmanHandle::getPublicKey(jsg::Lock& js) {
+  return dh.getPublicKey(js);
 }
 
-kj::Array<kj::byte> CryptoImpl::DiffieHellmanHandle::getPrivateKey() {
-  return dh.getPrivateKey();
+jsg::BufferSource CryptoImpl::DiffieHellmanHandle::getPrivateKey(jsg::Lock& js) {
+  return dh.getPrivateKey(js);
 }
 
-kj::Array<kj::byte> CryptoImpl::DiffieHellmanHandle::getGenerator() {
-  return dh.getGenerator();
+jsg::BufferSource CryptoImpl::DiffieHellmanHandle::getGenerator(jsg::Lock& js) {
+  return dh.getGenerator(js);
 }
 
-kj::Array<kj::byte> CryptoImpl::DiffieHellmanHandle::getPrime() {
-  return dh.getPrime();
+jsg::BufferSource CryptoImpl::DiffieHellmanHandle::getPrime(jsg::Lock& js) {
+  return dh.getPrime(js);
 }
 
-kj::Array<kj::byte> CryptoImpl::DiffieHellmanHandle::computeSecret(kj::Array<kj::byte> key) {
-  return dh.computeSecret(key);
+jsg::BufferSource CryptoImpl::DiffieHellmanHandle::computeSecret(
+    jsg::Lock& js, kj::Array<kj::byte> key) {
+  return dh.computeSecret(js, key);
 }
 
-kj::Array<kj::byte> CryptoImpl::DiffieHellmanHandle::generateKeys() {
-  return dh.generateKeys();
+jsg::BufferSource CryptoImpl::DiffieHellmanHandle::generateKeys(jsg::Lock& js) {
+  return dh.generateKeys(js);
 }
 
-int CryptoImpl::DiffieHellmanHandle::getVerifyError() { return verifyError; }
+int CryptoImpl::DiffieHellmanHandle::getVerifyError() {
+  return verifyError;
+}
 
 }  // namespace workerd::api::node

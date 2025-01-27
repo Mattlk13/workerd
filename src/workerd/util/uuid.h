@@ -4,12 +4,13 @@
 
 #pragma once
 
-#include <cstdint>
-#include <kj/string.h>
 #include <kj/hash.h>
+#include <kj/string.h>
+
+#include <cstdint>
 
 namespace kj {
-  class EntropySource;
+class EntropySource;
 }
 
 namespace workerd {
@@ -28,7 +29,7 @@ kj::String randomUUID(kj::Maybe<kj::EntropySource&> optionalEntropySource);
 //
 // A "null UUID" (a UUID with a value of 0) is considered invalid and is not possible to create.
 class UUID {
-public:
+ public:
   // Create a UUID from upper and lower parts. If the UUID would be null, return kj::none.
   //
   // For example, creating a UUID from upper and lower values of 81985529216486895 and
@@ -62,12 +63,11 @@ public:
     return kj::hashCode(upper, lower);
   }
 
-private:
+ private:
   uint64_t upper;
   uint64_t lower;
 
-  UUID(uint64_t upper, uint64_t lower) : upper(upper), lower(lower) {}
+  UUID(uint64_t upper, uint64_t lower): upper(upper), lower(lower) {}
 };
 
-
-} // namespace workerd
+}  // namespace workerd

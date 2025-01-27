@@ -10,6 +10,7 @@ declare namespace Rpc {
   export const __RPC_TARGET_BRAND: "__RPC_TARGET_BRAND";
   export const __WORKER_ENTRYPOINT_BRAND: "__WORKER_ENTRYPOINT_BRAND";
   export const __DURABLE_OBJECT_BRAND: "__DURABLE_OBJECT_BRAND";
+  export const __WORKFLOW_ENTRYPOINT_BRAND: "__WORKFLOW_ENTRYPOINT_BRAND";
   export interface RpcTargetBranded {
     [__RPC_TARGET_BRAND]: never;
   }
@@ -19,15 +20,22 @@ declare namespace Rpc {
   export interface DurableObjectBranded {
     [__DURABLE_OBJECT_BRAND]: never;
   }
+  export interface WorkflowEntrypointBranded {
+    [__WORKFLOW_ENTRYPOINT_BRAND]: never;
+  }
   export type EntrypointBranded =
     | WorkerEntrypointBranded
-    | DurableObjectBranded;
+    | DurableObjectBranded
+    | WorkflowEntrypointBranded;
 
   // Types that can be used through `Stub`s
   export type Stubable = RpcTargetBranded | ((...args: any[]) => any);
 
   // Types that can be passed over RPC
-  type Serializable =
+  // The reason for using a generic type here is to build a serializable subset of structured
+  //   cloneable composite types. This allows types defined with the "interface" keyword to pass the
+  //   serializable check as well. Otherwise, only types defined with the "type" keyword would pass.
+  type Serializable<T> =
     // Structured cloneables
     | void
     | undefined
@@ -43,10 +51,15 @@ declare namespace Rpc {
     | Error
     | RegExp
     // Structured cloneable composites
-    | Map<Serializable, Serializable>
-    | Set<Serializable>
-    | ReadonlyArray<Serializable>
-    | { [key: string | number]: Serializable }
+    | Map<
+        T extends Map<infer U, unknown> ? Serializable<U> : never,
+        T extends Map<unknown, infer U> ? Serializable<U> : never
+      >
+    | Set<T extends Set<infer U> ? Serializable<U> : never>
+    | ReadonlyArray<T extends ReadonlyArray<infer U> ? Serializable<U> : never>
+    | {
+        [K in keyof T]: K extends number | string ? Serializable<T[K]> : never;
+      }
     // Special types
     | ReadableStream<Uint8Array>
     | WritableStream<Uint8Array>
@@ -73,7 +86,8 @@ declare namespace Rpc {
     : T extends Set<infer V> ? Set<Stubify<V>>
     : T extends Array<infer V> ? Array<Stubify<V>>
     : T extends ReadonlyArray<infer V> ? ReadonlyArray<Stubify<V>>
-    : T extends { [key: string | number]: unknown } ? { [K in keyof T]: Stubify<T[K]> }
+    // When using "unknown" instead of "any", interfaces are not stubified.
+    : T extends { [key: string | number]: any } ? { [K in keyof T]: Stubify<T[K]> }
     : T;
 
   // Recursively rewrite all `Stub<T>`s with the corresponding `T`s.
@@ -105,7 +119,7 @@ declare namespace Rpc {
   // prettier-ignore
   type Result<R> =
     R extends Stubable ? Promise<Stub<R>> & Provider<R>
-    : R extends Serializable ? Promise<Stubify<R> & MaybeDisposable<R>> & MaybeProvider<R>
+    : R extends Serializable<R> ? Promise<Stubify<R> & MaybeDisposable<R>> & MaybeProvider<R>
     : never;
 
   // Type for method or property on an RPC interface.
@@ -150,7 +164,8 @@ declare module "cloudflare:workers" {
   // `protected` fields don't appear in `keyof`s, so can't be accessed over RPC
 
   export abstract class WorkerEntrypoint<Env = unknown>
-    implements Rpc.WorkerEntrypointBranded {
+    implements Rpc.WorkerEntrypointBranded
+  {
     [Rpc.__WORKER_ENTRYPOINT_BRAND]: never;
 
     protected ctx: ExecutionContext;
@@ -166,7 +181,8 @@ declare module "cloudflare:workers" {
   }
 
   export abstract class DurableObject<Env = unknown>
-    implements Rpc.DurableObjectBranded {
+    implements Rpc.DurableObjectBranded
+  {
     [Rpc.__DURABLE_OBJECT_BRAND]: never;
 
     protected ctx: DurableObjectState;
@@ -174,7 +190,7 @@ declare module "cloudflare:workers" {
     constructor(ctx: DurableObjectState, env: Env);
 
     fetch?(request: Request): Response | Promise<Response>;
-    alarm?(): void | Promise<void>;
+    alarm?(alarmInfo?: AlarmInvocationInfo): void | Promise<void>;
     webSocketMessage?(
       ws: WebSocket,
       message: string | ArrayBuffer
@@ -186,5 +202,61 @@ declare module "cloudflare:workers" {
       wasClean: boolean
     ): void | Promise<void>;
     webSocketError?(ws: WebSocket, error: unknown): void | Promise<void>;
+  }
+
+  export type WorkflowDurationLabel =
+    | "second"
+    | "minute"
+    | "hour"
+    | "day"
+    | "week"
+    | "month"
+    | "year";
+
+  export type WorkflowSleepDuration =
+    | `${number} ${WorkflowDurationLabel}${"s" | ""}`
+    | number;
+
+  export type WorkflowDelayDuration = WorkflowSleepDuration;
+
+  export type WorkflowTimeoutDuration = WorkflowSleepDuration;
+
+  export type WorkflowBackoff = "constant" | "linear" | "exponential";
+
+  export type WorkflowStepConfig = {
+    retries?: {
+      limit: number;
+      delay: WorkflowDelayDuration | number;
+      backoff?: WorkflowBackoff;
+    };
+    timeout?: WorkflowTimeoutDuration | number;
+  };
+
+  export type WorkflowEvent<T> = {
+    payload: Readonly<T>;
+    timestamp: Date;
+    instanceId: string;
+  };
+
+  export abstract class WorkflowStep {
+    do<T extends Rpc.Serializable<T>>(name: string, callback: () => Promise<T>): Promise<T>;
+    do<T extends Rpc.Serializable<T>>(name: string, config: WorkflowStepConfig, callback: () => Promise<T>): Promise<T>;
+    sleep: (name: string, duration: WorkflowSleepDuration) => Promise<void>;
+    sleepUntil: (name: string, timestamp: Date | number) => Promise<void>;
+  }
+
+  export abstract class WorkflowEntrypoint<
+    Env = unknown,
+    T extends Rpc.Serializable<T> | unknown = unknown,
+  > implements Rpc.WorkflowEntrypointBranded
+  {
+    [Rpc.__WORKFLOW_ENTRYPOINT_BRAND]: never;
+
+    protected ctx: ExecutionContext;
+    protected env: Env;
+
+    constructor(ctx: ExecutionContext, env: Env);
+
+    run(event: Readonly<WorkflowEvent<T>>, step: WorkflowStep): Promise<unknown>;
   }
 }

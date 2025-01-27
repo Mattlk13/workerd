@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",
-    "lib": [ "ESNext" ],
+    "lib": ["ESNext", "dom"],
     "alwaysStrict": true,
     "strict": true,
     "allowJs": true,
@@ -12,7 +12,7 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
     "noImplicitReturns": true,
-    "noPropertyAccessFromIndexSignature": true,
+    "noPropertyAccessFromIndexSignature": false,
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -20,32 +20,20 @@
     "esModuleInterop": true,
     "moduleResolution": "node",
     "declaration": true,
-    "types": [
-      // todo: consume generated workerd types
-      // "@cloudflare/workers-types"
-      "@types/node",
-    ],
+    "types": ["@types/node"],
     "paths": {
       "node:*": ["./*"],
       "node:assert/*": ["./*"],
+      "node:dns/*": ["./*"],
       "node:util/*": ["./*"],
       "node:path/*": ["./*"],
       "node:stream/*": ["./*"],
+      "node:timers/*": ["./*"],
       "node-internal:*": ["./internal/*"],
+      "cloudflare-internal:sockets": ["./internal/sockets.d.ts"],
       "cloudflare-internal:workers": ["./internal/workers.d.ts"],
-      "workerd:compatibility-flags": ["./internal/compatibility-flags.d.ts"],
+      "workerd:compatibility-flags": ["./internal/compatibility-flags.d.ts"]
     }
   },
-  "include": [
-    "*.ts",
-    "assert/*.ts",
-    "assert/*.js",
-    "stream/*.ts",
-    "stream/*.js",
-    "util/*.js",
-    "util/*.ts",
-    "path/*.ts",
-    "path/*.js",
-    "internal/*.ts"
-  ],
+  "exclude": []
 }

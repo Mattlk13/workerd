@@ -21,15 +21,12 @@ namespace workerd::api {
 // non-standard behavior. With the transformstream_enable_standard_constructor flag set, however,
 // the TransformStream implements standardized behavior.
 class TransformStream: public jsg::Object {
-public:
-  explicit TransformStream(
-      jsg::Ref<ReadableStream> readable,
-      jsg::Ref<WritableStream> writable)
+ public:
+  explicit TransformStream(jsg::Ref<ReadableStream> readable, jsg::Ref<WritableStream> writable)
       : readable(kj::mv(readable)),
         writable(kj::mv(writable)) {}
 
-  static jsg::Ref<TransformStream> constructor(
-      jsg::Lock& js,
+  static jsg::Ref<TransformStream> constructor(jsg::Lock& js,
       jsg::Optional<Transformer> maybeTransformer,
       jsg::Optional<StreamQueuingStrategy> maybeWritableStrategy,
       jsg::Optional<StreamQueuingStrategy> maybeReadableStrategy);
@@ -68,7 +65,7 @@ public:
     tracker.trackField("writable", writable);
   }
 
-private:
+ private:
   jsg::Ref<ReadableStream> readable;
   jsg::Ref<WritableStream> writable;
 
@@ -82,7 +79,7 @@ private:
 // Unlike standard the TransformStream, the readable side of an IdentityTransformStream
 // supports BYOB reads.
 class IdentityTransformStream: public TransformStream {
-public:
+ public:
   using TransformStream::TransformStream;
 
   struct QueuingStrategy {
@@ -92,8 +89,7 @@ public:
   };
 
   static jsg::Ref<IdentityTransformStream> constructor(
-      jsg::Lock& js,
-      jsg::Optional<QueuingStrategy> queuingStrategy = kj::none);
+      jsg::Lock& js, jsg::Optional<QueuingStrategy> queuingStrategy = kj::none);
 
   JSG_RESOURCE_TYPE(IdentityTransformStream) {
     JSG_INHERIT(TransformStream);
@@ -106,11 +102,10 @@ public:
 // We don't currently enforce this limit -- it just convinces the kj-http layer to
 // emit a Content-Length (assuming it doesn't get gzipped or anything).
 class FixedLengthStream: public IdentityTransformStream {
-public:
+ public:
   using IdentityTransformStream::IdentityTransformStream;
 
-  static jsg::Ref<FixedLengthStream> constructor(
-      jsg::Lock& js,
+  static jsg::Ref<FixedLengthStream> constructor(jsg::Lock& js,
       uint64_t expectedLength,
       jsg::Optional<QueuingStrategy> queuingStrategy = kj::none);
 

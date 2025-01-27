@@ -5,19 +5,22 @@
 #pragma once
 
 #include "readable.h"
-#include "writable.h"
 #include "transform.h"
-#include "../encoding.h"
+#include "writable.h"
+
+#include <workerd/api/encoding.h>
 
 namespace workerd::api {
 
 class TextEncoderStream: public TransformStream {
-public:
+ public:
   using TransformStream::TransformStream;
 
   static jsg::Ref<TextEncoderStream> constructor(jsg::Lock& js);
 
-  kj::StringPtr getEncoding() { return "utf-8"_kj; }
+  kj::StringPtr getEncoding() {
+    return "utf-8"_kj;
+  }
 
   JSG_RESOURCE_TYPE(TextEncoderStream) {
     JSG_INHERIT(TransformStream);
@@ -29,7 +32,7 @@ public:
 };
 
 class TextDecoderStream: public TransformStream {
-public:
+ public:
   struct TextDecoderStreamInit {
     jsg::Optional<bool> fatal;
     jsg::Optional<bool> ignoreBOM;
@@ -38,13 +41,11 @@ public:
   };
 
   TextDecoderStream(jsg::Ref<TextDecoder> decoder,
-                    jsg::Ref<ReadableStream> readable,
-                    jsg::Ref<WritableStream> writable);
+      jsg::Ref<ReadableStream> readable,
+      jsg::Ref<WritableStream> writable);
 
   static jsg::Ref<TextDecoderStream> constructor(
-      jsg::Lock& js,
-      jsg::Optional<kj::String> label,
-      jsg::Optional<TextDecoderStreamInit> options);
+      jsg::Lock& js, jsg::Optional<kj::String> label, jsg::Optional<TextDecoderStreamInit> options);
 
   kj::StringPtr getEncoding();
   bool getFatal();
@@ -61,7 +62,7 @@ public:
 
   void visitForMemoryInfo(jsg::MemoryTracker& tracker) const;
 
-private:
+ private:
   jsg::Ref<TextDecoder> decoder;
 
   void visitForGc(jsg::GcVisitor& visitor);

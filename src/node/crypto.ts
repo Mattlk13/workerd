@@ -2,18 +2,17 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 //
-/* eslint-disable */
+import { ERR_METHOD_NOT_IMPLEMENTED } from 'node-internal:internal_errors';
 
-import {
-  ERR_METHOD_NOT_IMPLEMENTED
-} from 'node-internal:internal_errors';
-
-export const getRandomValues = crypto.getRandomValues;
+export const getRandomValues = crypto.getRandomValues.bind(crypto);
 export const subtle = crypto.subtle;
 export const webcrypto = crypto;
 
-export function timingSafeEqual(a: any, b: any) {
-  return (subtle as any).timingSafeEqual(a, b);
+export function timingSafeEqual(
+  a: NodeJS.ArrayBufferView,
+  b: NodeJS.ArrayBufferView
+): boolean {
+  return (subtle as any).timingSafeEqual(a, b); // eslint-disable-line
 }
 
 import {
@@ -47,21 +46,11 @@ import {
   Hmac,
 } from 'node-internal:crypto_hash';
 
-import {
-  hkdf,
-  hkdfSync,
-} from 'node-internal:crypto_hkdf';
+import { hkdf, hkdfSync } from 'node-internal:crypto_hkdf';
 
-import {
-  pbkdf2,
-  pbkdf2Sync,
-  ArrayLike,
-} from 'node-internal:crypto_pbkdf2';
+import { pbkdf2, pbkdf2Sync, ArrayLike } from 'node-internal:crypto_pbkdf2';
 
-import {
-  scrypt,
-  scryptSync,
-} from 'node-internal:crypto_scrypt';
+import { scrypt, scryptSync } from 'node-internal:crypto_scrypt';
 
 import {
   KeyObject,
@@ -79,9 +68,7 @@ import {
 
 import { Certificate } from 'node-internal:crypto_spkac';
 
-import {
-  X509Certificate,
-} from 'node-internal:crypto_x509';
+import { X509Certificate } from 'node-internal:crypto_x509';
 
 export {
   // DH
@@ -136,51 +123,58 @@ export {
   Certificate,
   // X509
   X509Certificate,
-}
+};
 
-export function getCiphers() {
+export function getCiphers(): string[] {
+  // prettier-ignore
   return ["aes-128-cbc", "aes-192-cbc", "aes-256-cbc", "aes-128-ctr", "aes-192-ctr", "aes-256-ctr",
   "aes-128-ecb", "aes-192-ecb", "aes-256-ecb", "aes-128-gcm", "aes-192-gcm", "aes-256-gcm",
   "aes-128-ofb", "aes-192-ofb", "aes-256-ofb", "des-ecb", "des-ede", "des-ede-cbc", "rc2-cbc"];
 }
 
-export function getCurves() {
+export function getCurves(): string[] {
   // Hardcoded list of supported curves. Note that prime256v1 is equivalent to secp256r1, we follow
   // OpenSSL's and bssl's nomenclature here.
+
+  // prettier-ignore
   return ['secp224r1', 'prime256v1', 'secp384r1', 'secp521r1'];
 }
 
-export function getHashes() {
+export function getHashes(): string[] {
   // Hardcoded list of hashes supported in boringssl, node's approach looks pretty clunky. This is
   // expected to change infrequently based of bssl's stability-focused approach.
+
+  // prettier-ignore
   return ['md4', 'md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512', 'md5-sha1', 'RSA-MD5',
           'RSA-SHA1', 'RSA-SHA224', 'RSA-SHA256', 'RSA-SHA384', 'RSA-SHA512', 'DSA-SHA',
           'DSA-SHA1', 'ecdsa-with-SHA1'];
 }
 
 // We do not implement the openssl secure heap.
-export function secureHeapUsed() {
+export function secureHeapUsed(): Record<string, unknown> {
   return {
     total: 0,
     used: 0,
     utilization: 0,
     min: 0,
-  }
+  };
 }
 
 // We do not allow users to set the engine used.
-export function setEngine(_1 : string, _2?: number) {
+export function setEngine(_1: string, _2?: number): void {
   throw new ERR_METHOD_NOT_IMPLEMENTED('setEngine');
 }
 
 // We do not allow users to modify the FIPS enablement.
-export function setFips(_: boolean) {
+export function setFips(_: boolean): void {
   throw new ERR_METHOD_NOT_IMPLEMENTED('setFips');
 }
 
 // We always run in FIPS mode.
 export const fips = true;
-export function getFips() { return fips; }
+export function getFips(): boolean {
+  return fips;
+}
 
 export default {
   // DH
@@ -236,11 +230,17 @@ export default {
   // Fips
   getFips,
   setFips,
-  get fips() { return getFips(); },
-  set fips(_: boolean) { setFips(_); },
+  get fips(): boolean {
+    return getFips();
+  },
+  set fips(_: boolean) {
+    setFips(_);
+  },
   // WebCrypto
   subtle,
   webcrypto,
+  // Spkac
+  Certificate,
   // X509
   X509Certificate,
 };
@@ -285,14 +285,14 @@ export default {
 //   * [x] crypto.createHash(algorithm[, options])
 //   * [x] crypto.createHmac(algorithm, key[, options])
 //   * [x] crypto.getHashes()
-// * Keys
-//   * [ ] crypto.createPrivateKey(key)
-//   * [ ] crypto.createPublicKey(key)
-//   * [x] crypto.createSecretKey(key[, encoding])
-//   * [x] crypto.generateKey(type, options, callback)
-//   * [x] crypto.generateKeyPair(type, options, callback)
-//   * [x] crypto.generateKeyPairSync(type, options)
-//   * [x] crypto.generateKeySync(type, options)
+// * Keys, not implemented yet. Calling the following APIs will throw a ERR_METHOD_NOT_IMPLEMENTED
+//   * [.] crypto.createPrivateKey(key)
+//   * [.] crypto.createPublicKey(key)
+//   * [.] crypto.createSecretKey(key[, encoding])
+//   * [.] crypto.generateKey(type, options, callback)
+//   * [.] crypto.generateKeyPair(type, options, callback)
+//   * [.] crypto.generateKeyPairSync(type, options)
+//   * [.] crypto.generateKeySync(type, options)
 // * Sign/Verify
 //   * [ ] crypto.createSign(algorithm[, options])
 //   * [ ] crypto.createVerify(algorithm[, options])
@@ -326,4 +326,3 @@ export default {
 // * WebCrypto
 //   * [x] crypto.subtle
 //   * [x] crypto.webcrypto
-

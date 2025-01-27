@@ -1,36 +1,30 @@
 #include "spkac.h"
+
 #include "impl.h"
-#include <workerd/jsg/jsg.h>
+
 #include <workerd/io/io-context.h>
-#include <openssl/x509.h>
+#include <workerd/jsg/jsg.h>
+#include <workerd/util/strings.h>
+
 #include <openssl/pem.h>
+#include <openssl/x509.h>
 
 namespace workerd::api {
 namespace {
-kj::ArrayPtr<const kj::byte> trim(kj::ArrayPtr<const kj::byte> input) {
-  size_t length = input.size();
-  for (auto i = length - 1; i >= 0; --i) {
-    if (input[i] != ' ' && input[i] != '\n' && input[i] != '\r' && input[i] != '\t') {
-      break;
-    }
-  }
-  return input.first(length);
-}
-
-kj::Array<kj::byte> toArray(BIO* bio) {
+jsg::BufferSource toArray(jsg::Lock& js, BIO* bio) {
   BUF_MEM* bptr;
   BIO_get_mem_ptr(bio, &bptr);
-  auto buf = kj::heapArray<char>(bptr->length);
+  auto buf = jsg::BackingStore::alloc(js, bptr->length);
   auto aptr = kj::arrayPtr(bptr->data, bptr->length);
-  buf.asPtr().copyFrom(aptr);
-  return buf.releaseAsBytes();
+  buf.asArrayPtr<char>().copyFrom(aptr);
+  return jsg::BufferSource(js, kj::mv(buf));
 }
 
 kj::Maybe<kj::Own<NETSCAPE_SPKI>> tryGetSpki(kj::ArrayPtr<const kj::byte> input) {
   static constexpr int32_t kMaxLength = kj::maxValue;
   JSG_REQUIRE(input.size() <= kMaxLength, RangeError, "spkac is too large");
-  input = trim(input);
-  auto ptr = NETSCAPE_SPKI_b64_decode(input.asChars().begin(), input.size());
+  auto trimmed = trimTailingWhitespace(input.asChars());
+  auto ptr = NETSCAPE_SPKI_b64_decode(trimmed.begin(), trimmed.size());
   if (!ptr) return kj::none;
   return kj::disposeWith<NETSCAPE_SPKI_free>(ptr);
 }
@@ -76,13 +70,13 @@ bool verifySpkac(kj::ArrayPtr<const kj::byte> input) {
   return false;
 }
 
-kj::Maybe<kj::Array<kj::byte>> exportPublicKey(kj::ArrayPtr<const kj::byte> input) {
+kj::Maybe<jsg::BufferSource> exportPublicKey(jsg::Lock& js, kj::ArrayPtr<const kj::byte> input) {
   ClearErrorOnReturn clearErrorOnReturn;
   KJ_IF_SOME(spki, tryGetSpki(input)) {
     KJ_IF_SOME(bio, tryNewBio()) {
       KJ_IF_SOME(key, tryOwnPkey(spki)) {
         if (PEM_write_bio_PUBKEY(bio.get(), key.get()) > 0) {
-          return toArray(bio.get());
+          return toArray(js, bio.get());
         }
       }
     }
@@ -90,17 +84,21 @@ kj::Maybe<kj::Array<kj::byte>> exportPublicKey(kj::ArrayPtr<const kj::byte> inpu
   return kj::none;
 }
 
-kj::Maybe<kj::Array<kj::byte>> exportChallenge(kj::ArrayPtr<const kj::byte> input) {
+kj::Maybe<jsg::BufferSource> exportChallenge(jsg::Lock& js, kj::ArrayPtr<const kj::byte> input) {
   ClearErrorOnReturn clearErrorOnReturn;
   KJ_IF_SOME(spki, tryGetSpki(input)) {
     kj::byte* buf = nullptr;
+    KJ_DEFER(OPENSSL_free(buf));
+
     int buf_size = ASN1_STRING_to_UTF8(&buf, spki->spkac->challenge);
     if (buf_size < 0 || buf == nullptr) return kj::none;
-    // Pay attention to how the buffer is freed below...
-    return kj::arrayPtr(buf, buf_size).attach(kj::defer([buf]() {
-      OPENSSL_free(buf);
-    }));
+
+    auto dest = jsg::BackingStore::alloc(js, buf_size);
+    auto src = kj::arrayPtr(buf, buf_size);
+    dest.asArrayPtr().copyFrom(src);
+
+    return jsg::BufferSource(js, kj::mv(dest));
   }
   return kj::none;
 }
-}
+}  // namespace workerd::api

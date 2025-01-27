@@ -1,6 +1,7 @@
 #pragma once
 
 #include <workerd/jsg/jsg.h>
+
 #include <openssl/x509.h>
 
 namespace workerd::api {
@@ -8,7 +9,7 @@ namespace workerd::api {
 class CryptoKey;
 
 class X509Certificate: public jsg::Object {
-public:
+ public:
   X509Certificate(X509* cert): cert_(kj::disposeWith<X509_free>(cert)) {}
 
   static kj::Maybe<jsg::Ref<X509Certificate>> parse(kj::Array<const kj::byte> raw);
@@ -22,7 +23,7 @@ public:
   kj::Maybe<kj::String> getValidTo();
   kj::Maybe<kj::Array<kj::String>> getKeyUsage();
   kj::Maybe<kj::Array<const char>> getSerialNumber();
-  kj::Array<kj::byte> getRaw();
+  jsg::BufferSource getRaw(jsg::Lock& js);
   kj::Maybe<jsg::Ref<CryptoKey>> getPublicKey();
   kj::Maybe<kj::String> getPem();
   kj::Maybe<kj::String> getFingerprint();
@@ -79,7 +80,7 @@ public:
     JSG_METHOD(toLegacyObject);
   }
 
-private:
+ private:
   kj::Own<X509> cert_;
   kj::Maybe<jsg::Ref<X509Certificate>> issuerCert_;
 };
@@ -88,6 +89,4 @@ private:
 
 KJ_DECLARE_NON_POLYMORPHIC(X509);
 
-#define EW_CRYPTO_X509_ISOLATE_TYPES                  \
-  api::X509Certificate,                               \
-  api::X509Certificate::CheckOptions
+#define EW_CRYPTO_X509_ISOLATE_TYPES api::X509Certificate, api::X509Certificate::CheckOptions

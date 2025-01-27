@@ -9,6 +9,17 @@ wd_cc_library(
         "perfetto-tracing.h",
         "use-perfetto-categories.h",
     ],
+    # HACK: We do not use the perfetto IPC system backend in any capacity. If perfetto-tracing.c++
+    # is able to inline and optimize its perfetto::Tracing::Initialize() call properly, there are no
+    # references to it anywhere in workerd and the linker can optimize it away, reducing binary
+    # sizes. Enable optimization unconditionally here so that the backend goes away.
+    # See perfetto's include/perfetto/tracing/tracing.h for more context.
+    # Alternatively, we could create an override for perfetto_build_flags.h to disable the
+    # PERFETTO_IPC and PERFETTO_SYSTEM_CONSUMER defines which also exist to facilitate link-time
+    # code elimination, but doing so results in a smaller size improvement than enabling
+    # optimization here, or no additional improvement when doing combined with enabling
+    # optimization.
+    copts = ["-O3"],
     defines = select({
         "@platforms//os:windows": [],
         "//conditions:default": ["WORKERD_USE_PERFETTO"],
@@ -29,7 +40,6 @@ wd_cc_library(
 wd_cc_library(
     name = "util",
     srcs = [
-        "mimetype.c++",
         "stream-utils.c++",
         "wait-list.c++",
     ],
@@ -41,12 +51,8 @@ wd_cc_library(
         "batch-queue.h",
         "canceler.h",
         "color-util.h",
-        "duration-exceeded-logger.h",
         "http-util.h",
-        "mimetype.h",
         "stream-utils.h",
-        "string-buffer.h",
-        "strings.h",
         "uncaught-exception-source.h",
         "wait-list.h",
         "weak-refs.h",
@@ -54,9 +60,44 @@ wd_cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":duration-exceeded-logger",
+        "@capnp-cpp//src/kj",
+        "@capnp-cpp//src/kj:kj-async",
+        # TODO(cleanup): Only for abortable.h, factor out
+        "@capnp-cpp//src/kj/compat:kj-http",
+    ],
+)
+
+wd_cc_library(
+    name = "mimetype",
+    srcs = ["mimetype.c++"],
+    hdrs = ["mimetype.h"],
+    implementation_deps = [
+        ":string-buffer",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/workerd/jsg:memory-tracker",
         "@capnp-cpp//src/kj",
         "@capnp-cpp//src/kj:kj-async",
     ],
+)
+
+wd_cc_library(
+    name = "strings",
+    srcs = ["strings.c++"],
+    hdrs = ["strings.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj",
+    ],
+)
+
+wd_cc_library(
+    name = "string-buffer",
+    hdrs = ["string-buffer.h"],
+    visibility = ["//visibility:public"],
+    deps = [":strings"],
 )
 
 wd_cc_library(
@@ -87,10 +128,12 @@ wd_cc_library(
     srcs = [
         "sqlite.c++",
         "sqlite-kv.c++",
+        "sqlite-metadata.c++",
     ],
     hdrs = [
         "sqlite.h",
         "sqlite-kv.h",
+        "sqlite-metadata.h",
     ],
     implementation_deps = [
         "@sqlite3",
@@ -98,6 +141,7 @@ wd_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":sentry",
+        "//src/workerd/jsg:exception",
         "@capnp-cpp//src/kj:kj-async",
     ],
 )
@@ -113,21 +157,6 @@ wd_cc_library(
 )
 
 wd_cc_library(
-    name = "symbolizer",
-    srcs = ["symbolizer.c++"],
-    target_compatible_with = select({
-        "@platforms//os:windows": ["@platforms//:incompatible"],
-        "//conditions:default": [],
-    }),
-    visibility = ["//visibility:public"],
-    deps = [
-        ":sentry",
-        "@capnp-cpp//src/kj",
-    ],
-    alwayslink = 1,
-)
-
-wd_cc_library(
     name = "own-util",
     hdrs = ["own-util.h"],
     visibility = ["//visibility:public"],
@@ -138,6 +167,9 @@ wd_cc_library(
     name = "sentry",
     hdrs = ["sentry.h"],
     visibility = ["//visibility:public"],
+    deps = [
+        "@capnp-cpp//src/kj",
+    ],
 )
 
 wd_cc_library(
@@ -168,23 +200,45 @@ wd_cc_library(
     name = "duration-exceeded-logger",
     hdrs = ["duration-exceeded-logger.h"],
     visibility = ["//visibility:public"],
+    deps = ["@capnp-cpp//src/kj"],
+)
+
+wd_cc_library(
+    name = "completion-membrane",
+    hdrs = ["completion-membrane.h"],
+    visibility = ["//visibility:public"],
+    deps = ["@capnp-cpp//src/capnp"],
 )
 
 exports_files(["autogate.h"])
 
-[kj_test(
-    src = f,
-    deps = [
-        ":util",
-    ],
-) for f in [
-    "batch-queue-test.c++",
-    "mimetype-test.c++",
-    "wait-list-test.c++",
-    "duration-exceeded-logger-test.c++",
-    "string-buffer-test.c++",
+[
+    kj_test(
+        src = f,
+        deps = [
+            ":util",
+        ],
+    )
+    for f in [
+        "batch-queue-test.c++",
+        "wait-list-test.c++",
+        "duration-exceeded-logger-test.c++",
     ]
 ]
+
+kj_test(
+    src = "string-buffer-test.c++",
+    deps = [
+        ":string-buffer",
+    ],
+)
+
+kj_test(
+    src = "mimetype-test.c++",
+    deps = [
+        ":mimetype",
+    ],
+)
 
 kj_test(
     src = "sqlite-test.c++",
@@ -195,6 +249,13 @@ kj_test(
 
 kj_test(
     src = "sqlite-kv-test.c++",
+    deps = [
+        ":sqlite",
+    ],
+)
+
+kj_test(
+    src = "sqlite-metadata-test.c++",
     deps = [
         ":sqlite",
     ],

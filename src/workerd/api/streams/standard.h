@@ -6,8 +6,11 @@
 
 #include "common.h"
 #include "queue.h"
-#include <workerd/jsg/function.h>
+
+#include <workerd/jsg/jsg.h>
 #include <workerd/util/weak-refs.h>
+
+#include <list>
 
 namespace workerd::api {
 
@@ -129,21 +132,18 @@ class WritableStreamJsController;
 // ReadableStreamDefaultController and the ReadableByteStreamController.
 template <class Self>
 class ReadableImpl {
-public:
+ public:
   using Consumer = typename Self::QueueType::Consumer;
   using Entry = typename Self::QueueType::Entry;
   using StateListener = typename Self::QueueType::ConsumerImpl::StateListener;
 
-  ReadableImpl(UnderlyingSource underlyingSource,
-               StreamQueuingStrategy queuingStrategy);
+  ReadableImpl(UnderlyingSource underlyingSource, StreamQueuingStrategy queuingStrategy);
 
   // Invokes the start algorithm to initialize the underlying source.
   void start(jsg::Lock& js, jsg::Ref<Self> self);
 
   // If the readable is not already closed or errored, initiates a cancellation.
-  jsg::Promise<void> cancel(jsg::Lock& js,
-                             jsg::Ref<Self> self,
-                             v8::Local<v8::Value> maybeReason);
+  jsg::Promise<void> cancel(jsg::Lock& js, jsg::Ref<Self> self, v8::Local<v8::Value> maybeReason);
 
   // True if the readable is not closed, not errored, and close has not already been requested.
   bool canCloseOrEnqueue();
@@ -189,7 +189,7 @@ public:
   size_t jsgGetMemorySelfSize() const;
   void jsgGetMemoryInfo(jsg::MemoryTracker& tracker) const;
 
-private:
+ private:
   struct Algorithms {
     kj::Maybe<jsg::Function<UnderlyingSource::StartAlgorithm>> start;
     kj::Maybe<jsg::Function<UnderlyingSource::PullAlgorithm>> pull;
@@ -248,7 +248,7 @@ private:
 // controllers be introduced.
 template <class Self>
 class WritableImpl {
-public:
+ public:
   using PendingAbort = WritableStreamController::PendingAbort;
 
   struct WriteRequest {
@@ -268,9 +268,7 @@ public:
 
   WritableImpl(WritableStream& owner);
 
-  jsg::Promise<void> abort(jsg::Lock& js,
-                            jsg::Ref<Self> self,
-                            v8::Local<v8::Value> reason);
+  jsg::Promise<void> abort(jsg::Lock& js, jsg::Ref<Self> self, v8::Local<v8::Value> reason);
 
   void advanceQueueIfNeeded(jsg::Lock& js, jsg::Ref<Self> self);
 
@@ -289,14 +287,10 @@ public:
   void finishErroring(jsg::Lock& js, jsg::Ref<Self> self);
 
   void finishInFlightClose(
-      jsg::Lock& js,
-      jsg::Ref<Self> self,
-      kj::Maybe<v8::Local<v8::Value>> reason = kj::none);
+      jsg::Lock& js, jsg::Ref<Self> self, kj::Maybe<v8::Local<v8::Value>> reason = kj::none);
 
   void finishInFlightWrite(
-      jsg::Lock& js,
-      jsg::Ref<Self> self,
-      kj::Maybe<v8::Local<v8::Value>> reason = kj::none);
+      jsg::Lock& js, jsg::Ref<Self> self, kj::Maybe<v8::Local<v8::Value>> reason = kj::none);
 
   ssize_t getDesiredSize();
 
@@ -306,8 +300,7 @@ public:
 
   kj::Maybe<WritableStreamJsController&> tryGetOwner();
 
-  void setup(
-      jsg::Lock& js,
+  void setup(jsg::Lock& js,
       jsg::Ref<Self> self,
       UnderlyingSink underlyingSink,
       StreamQueuingStrategy queuingStrategy);
@@ -335,8 +328,7 @@ public:
   size_t jsgGetMemorySelfSize() const;
   void jsgGetMemoryInfo(jsg::MemoryTracker& tracker) const;
 
-private:
-
+ private:
   struct Algorithms {
     kj::Maybe<jsg::Function<UnderlyingSink::AbortAlgorithm>> abort;
     kj::Maybe<jsg::Function<UnderlyingSink::CloseAlgorithm>> close;
@@ -369,17 +361,17 @@ private:
   // try tracing each other.
   kj::Maybe<kj::Own<WeakRef<WritableStream>>> owner;
   jsg::Ref<AbortSignal> signal;
-  kj::OneOf<StreamStates::Closed,
-            StreamStates::Errored,
-            StreamStates::Erroring,
-            Writable> state = Writable();
+  kj::OneOf<StreamStates::Closed, StreamStates::Errored, StreamStates::Erroring, Writable> state =
+      Writable();
   Algorithms algorithms;
   bool started = false;
   bool starting = false;
   bool backpressure = false;
   size_t highWaterMark = 1;
 
-  std::deque<WriteRequest> writeRequests;
+  // `writeRequests` is often going to be empty in common usage patterns, in which case std::list
+  // is more memory efficient than a std::deque, for example.
+  std::list<WriteRequest> writeRequests;
   size_t amountBuffered = 0;
   bool warnAboutExcessiveBackpressure = true;
   size_t excessiveBackpressureWarningCount = 0;
@@ -387,7 +379,7 @@ private:
   kj::Maybe<WriteRequest> inFlightWrite;
   kj::Maybe<jsg::Promise<void>::Resolver> inFlightClose;
   kj::Maybe<jsg::Promise<void>::Resolver> closeRequest;
-  kj::Maybe<PendingAbort> maybePendingAbort;
+  kj::Maybe<kj::Own<PendingAbort>> maybePendingAbort;
 
   friend Self;
 };
@@ -398,17 +390,16 @@ private:
 // It is capable of streaming any JavaScript value through it, including typed arrays and
 // array buffers, but treats all values as opaque. BYOB reads are not supported.
 class ReadableStreamDefaultController: public jsg::Object {
-public:
+ public:
   using QueueType = ValueQueue;
   using ReadableImpl = ReadableImpl<ReadableStreamDefaultController>;
 
-  ReadableStreamDefaultController(UnderlyingSource underlyingSource,
-                                  StreamQueuingStrategy queuingStrategy);
+  ReadableStreamDefaultController(
+      UnderlyingSource underlyingSource, StreamQueuingStrategy queuingStrategy);
 
   void start(jsg::Lock& js);
 
-  jsg::Promise<void> cancel(jsg::Lock& js,
-                            jsg::Optional<v8::Local<v8::Value>> maybeReason);
+  jsg::Promise<void> cancel(jsg::Lock& js, jsg::Optional<v8::Local<v8::Value>> maybeReason);
 
   void close(jsg::Lock& js);
 
@@ -442,7 +433,7 @@ public:
 
   kj::Maybe<StreamStates::Errored> getMaybeErrorState(jsg::Lock& js);
 
-private:
+ private:
   kj::Maybe<IoContext&> ioContext;
   ReadableImpl impl;
 
@@ -463,9 +454,8 @@ private:
 // dictated by the streams specification since the class name is used as the exported
 // object name.
 class ReadableStreamBYOBRequest: public jsg::Object {
-public:
-  ReadableStreamBYOBRequest(
-      jsg::Lock& js,
+ public:
+  ReadableStreamBYOBRequest(jsg::Lock& js,
       kj::Own<ByteQueue::ByobRequest> readRequest,
       jsg::Ref<ReadableByteStreamController> controller);
 
@@ -498,15 +488,15 @@ public:
 
   void visitForMemoryInfo(jsg::MemoryTracker& tracker) const;
 
-private:
+ private:
   struct Impl {
     kj::Own<ByteQueue::ByobRequest> readRequest;
     jsg::Ref<ReadableByteStreamController> controller;
     jsg::V8Ref<v8::Uint8Array> view;
 
     Impl(jsg::Lock& js,
-         kj::Own<ByteQueue::ByobRequest> readRequest,
-         jsg::Ref<ReadableByteStreamController> controller);
+        kj::Own<ByteQueue::ByobRequest> readRequest,
+        jsg::Ref<ReadableByteStreamController> controller);
 
     void updateView(jsg::Lock& js);
   };
@@ -521,17 +511,16 @@ private:
 // It is capable of only streaming byte data through it in the form of typed arrays.
 // BYOB reads are supported.
 class ReadableByteStreamController: public jsg::Object {
-public:
+ public:
   using QueueType = ByteQueue;
   using ReadableImpl = ReadableImpl<ReadableByteStreamController>;
 
-  ReadableByteStreamController(UnderlyingSource underlyingSource,
-                               StreamQueuingStrategy queuingStrategy);
+  ReadableByteStreamController(
+      UnderlyingSource underlyingSource, StreamQueuingStrategy queuingStrategy);
 
   void start(jsg::Lock& js);
 
-  jsg::Promise<void> cancel(jsg::Lock& js,
-                             jsg::Optional<v8::Local<v8::Value>> maybeReason);
+  jsg::Promise<void> cancel(jsg::Lock& js, jsg::Optional<v8::Local<v8::Value>> maybeReason);
 
   void close(jsg::Lock& js);
 
@@ -563,7 +552,7 @@ public:
     tracker.trackField("maybeByobRequest", maybeByobRequest);
   }
 
-private:
+ private:
   kj::Maybe<IoContext&> ioContext;
   ReadableImpl impl;
   kj::Maybe<jsg::Ref<ReadableStreamBYOBRequest>> maybeByobRequest;
@@ -581,7 +570,7 @@ private:
 // to determine whether it is capable of handling whatever type of JavaScript object it
 // is given.
 class WritableStreamDefaultController: public jsg::Object {
-public:
+ public:
   using WritableImpl = WritableImpl<WritableStreamDefaultController>;
 
   explicit WritableStreamDefaultController(WritableStream& owner);
@@ -598,12 +587,11 @@ public:
 
   kj::Maybe<v8::Local<v8::Value>> isErroring(jsg::Lock& js);
 
-  bool isStarted() { return impl.started; }
+  bool isStarted() {
+    return impl.started;
+  }
 
-  void setup(
-      jsg::Lock& js,
-      UnderlyingSink underlyingSink,
-      StreamQueuingStrategy queuingStrategy);
+  void setup(jsg::Lock& js, UnderlyingSink underlyingSink, StreamQueuingStrategy queuingStrategy);
 
   jsg::Promise<void> write(jsg::Lock& js, v8::Local<v8::Value> value);
 
@@ -616,7 +604,7 @@ public:
 
   void cancelPendingWrites(jsg::Lock& js, jsg::JsValue reason);
 
-private:
+ private:
   kj::Maybe<IoContext&> ioContext;
   WritableImpl impl;
 
@@ -634,13 +622,13 @@ private:
 // However, user code can do silly things like hold the Transform controller
 // long after both the readable and writable sides have been gc'd.
 class TransformStreamDefaultController: public jsg::Object {
-public:
+ public:
   TransformStreamDefaultController(jsg::Lock& js);
 
   void init(jsg::Lock& js,
-            jsg::Ref<ReadableStream>& readable,
-            jsg::Ref<WritableStream>& writable,
-            jsg::Optional<Transformer> maybeTransformer);
+      jsg::Ref<ReadableStream>& readable,
+      jsg::Ref<WritableStream>& writable,
+      jsg::Optional<Transformer> maybeTransformer);
 
   // The startPromise is used by both the readable and writable sides in their respective
   // start algorithms. The promise itself is resolved within the init function when the
@@ -676,7 +664,7 @@ public:
 
   void visitForMemoryInfo(jsg::MemoryTracker& tracker) const;
 
-private:
+ private:
   struct Algorithms {
     kj::Maybe<jsg::Function<Transformer::TransformAlgorithm>> transform;
     kj::Maybe<jsg::Function<Transformer::FlushAlgorithm>> flush;
@@ -699,10 +687,8 @@ private:
     }
   };
 
-  void errorWritableAndUnblockWrite(jsg::Lock& js,
-                                    v8::Local<v8::Value> reason);
-  jsg::Promise<void> performTransform(jsg::Lock& js,
-                                       v8::Local<v8::Value> chunk);
+  void errorWritableAndUnblockWrite(jsg::Lock& js, v8::Local<v8::Value> reason);
+  jsg::Promise<void> performTransform(jsg::Lock& js, v8::Local<v8::Value> chunk);
   void setBackpressure(jsg::Lock& js, bool newBackpressure);
 
   kj::Maybe<IoContext&> ioContext;

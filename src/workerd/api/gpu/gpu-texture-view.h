@@ -5,23 +5,23 @@
 #pragma once
 
 #include "gpu-utils.h"
-#include "workerd/jsg/iterator.h"
-#include <webgpu/webgpu_cpp.h>
-#include <workerd/jsg/buffersource.h>
+
 #include <workerd/jsg/jsg.h>
+
+#include <webgpu/webgpu_cpp.h>
 
 namespace workerd::api::gpu {
 
-class GPUTextureView : public jsg::Object {
-public:
+class GPUTextureView: public jsg::Object {
+ public:
   // Implicit cast operator to Dawn GPU object
   inline operator const wgpu::TextureView&() const {
     return textureView_;
   }
-  explicit GPUTextureView(wgpu::TextureView t) : textureView_(kj::mv(t)){};
+  explicit GPUTextureView(wgpu::TextureView t): textureView_(kj::mv(t)) {};
   JSG_RESOURCE_TYPE(GPUTextureView) {}
 
-private:
+ private:
   wgpu::TextureView textureView_;
 };
 
@@ -34,8 +34,14 @@ struct GPUTextureViewDescriptor {
   GPUIntegerCoordinate mipLevelCount;
   jsg::Optional<GPUIntegerCoordinate> baseArrayLayer;
   GPUIntegerCoordinate arrayLayerCount;
-  JSG_STRUCT(label, format, dimension, aspect, baseMipLevel, mipLevelCount, baseArrayLayer,
-             arrayLayerCount);
+  JSG_STRUCT(label,
+      format,
+      dimension,
+      aspect,
+      baseMipLevel,
+      mipLevelCount,
+      baseArrayLayer,
+      arrayLayerCount);
 };
 
-} // namespace workerd::api::gpu
+}  // namespace workerd::api::gpu

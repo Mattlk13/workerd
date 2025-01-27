@@ -4,16 +4,22 @@
 
 #pragma once
 
-#include <workerd/jsg/jsg.h>
-#include "streams.h"
+#include <workerd/api/streams/readable.h>
 #include <workerd/io/limit-enforcer.h>
+#include <workerd/jsg/jsg.h>
 
-namespace workerd { class IoContext; }
+namespace kj {
+class HttpClient;
+class HttpHeaders;
+}  // namespace kj
+namespace workerd {
+class IoContext;
+}
 namespace workerd::api {
 
 // A capability to a KV namespace.
 class KvNamespace: public jsg::Object {
-public:
+ public:
   struct AdditionalHeader {
     kj::String name;
     kj::String value;
@@ -28,7 +34,8 @@ public:
   // representing this namespace.
   // `additionalHeaders` is what gets appended to every outbound request.
   explicit KvNamespace(kj::Array<AdditionalHeader> additionalHeaders, uint subrequestChannel)
-      : additionalHeaders(kj::mv(additionalHeaders)), subrequestChannel(subrequestChannel) {}
+      : additionalHeaders(kj::mv(additionalHeaders)),
+        subrequestChannel(subrequestChannel) {}
 
   struct GetOptions {
     jsg::Optional<kj::String> type;
@@ -41,16 +48,10 @@ public:
   };
 
   using GetResult = kj::Maybe<
-      kj::OneOf<jsg::Ref<ReadableStream>,
-                kj::Array<byte>,
-                kj::String,
-                jsg::JsRef<jsg::JsValue>>>;
+      kj::OneOf<jsg::Ref<ReadableStream>, kj::Array<byte>, kj::String, jsg::JsRef<jsg::JsValue>>>;
 
   jsg::Promise<GetResult> get(
-      jsg::Lock& js,
-      kj::String name,
-      jsg::Optional<kj::OneOf<kj::String, GetOptions>> options,
-      CompatibilityFlags::Reader flags);
+      jsg::Lock& js, kj::String name, jsg::Optional<kj::OneOf<kj::String, GetOptions>> options);
 
   struct GetWithMetadataResult {
     GetResult value;
@@ -65,10 +66,12 @@ public:
     });
   };
 
-  jsg::Promise<GetWithMetadataResult> getWithMetadata(
-      jsg::Lock& js,
+  jsg::Promise<GetWithMetadataResult> getWithMetadataImpl(jsg::Lock& js,
       kj::String name,
-      jsg::Optional<kj::OneOf<kj::String, GetOptions>> options);
+      jsg::Optional<kj::OneOf<kj::String, GetOptions>> options,
+      LimitEnforcer::KvOpType op);
+  jsg::Promise<GetWithMetadataResult> getWithMetadata(
+      jsg::Lock& js, kj::String name, jsg::Optional<kj::OneOf<kj::String, GetOptions>> options);
 
   struct ListOptions {
     jsg::Optional<int> limit;
@@ -100,8 +103,7 @@ public:
 
   using PutSupportedTypes = kj::OneOf<kj::String, kj::Array<byte>, jsg::Ref<ReadableStream>>;
 
-  jsg::Promise<void> put(
-      jsg::Lock& js,
+  jsg::Promise<void> put(jsg::Lock& js,
       kj::String name,
       PutBody body,
       jsg::Optional<PutOptions> options,
@@ -160,33 +162,29 @@ public:
     });
   }
 
-  void visitForMemoryInfo(jsg::MemoryTracker& tracker) const  {
+  void visitForMemoryInfo(jsg::MemoryTracker& tracker) const {
     tracker.trackField("additionalHeaders", additionalHeaders.asPtr());
   }
 
-protected:
+ protected:
   // Do the boilerplate work of constructing an HTTP client to KV. Setting a KvOptType causes
   // the limiter for that op type to be checked. If a string is used, that's used as the operation
   // name for the HttpClient without any limiter enforcement.
   // NOTE: The urlStr is added to the headers as a non-owning reference and thus must outlive
   // the usage of the headers.
-  kj::Own<kj::HttpClient> getHttpClient(
-      IoContext& context,
+  kj::Own<kj::HttpClient> getHttpClient(IoContext& context,
       kj::HttpHeaders& headers,
       kj::OneOf<LimitEnforcer::KvOpType, kj::LiteralStringConst> opTypeOrName,
-      kj::StringPtr urlStr
-  );
+      kj::StringPtr urlStr,
+      kj::Maybe<kj::OneOf<ListOptions, kj::OneOf<kj::String, GetOptions>, PutOptions>> options);
 
-private:
+ private:
   kj::Array<AdditionalHeader> additionalHeaders;
   uint subrequestChannel;
 };
 
-#define EW_KV_ISOLATE_TYPES                 \
-  api::KvNamespace,                         \
-  api::KvNamespace::ListOptions,            \
-  api::KvNamespace::GetOptions,             \
-  api::KvNamespace::PutOptions,             \
-  api::KvNamespace::GetWithMetadataResult
+#define EW_KV_ISOLATE_TYPES                                                                        \
+  api::KvNamespace, api::KvNamespace::ListOptions, api::KvNamespace::GetOptions,                   \
+      api::KvNamespace::PutOptions, api::KvNamespace::GetWithMetadataResult
 // The list of kv.h types that are added to worker.c++'s JSG_DECLARE_ISOLATE_TYPE
 }  // namespace workerd::api

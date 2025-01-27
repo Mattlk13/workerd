@@ -4,18 +4,18 @@
 
 #pragma once
 
+#include <workerd/jsg/jsg.h>
+#include <workerd/jsg/modules-new.h>
+#include <workerd/jsg/rtti.h>
+#include <workerd/jsg/url.h>
+
 #include <kj/array.h>
 #include <kj/string.h>
-#include <workerd/io/compatibility-date.h>
-#include <workerd/jsg/modules.h>
-#include <workerd/jsg/modules-new.h>
-#include <workerd/jsg/url.h>
-#include <workerd/jsg/rtti.h>
 
 namespace workerd::api {
 
 class RTTIModule final: public jsg::Object {
-public:
+ public:
   RTTIModule() = default;
   RTTIModule(jsg::Lock&, const jsg::Url&) {}
 
@@ -30,8 +30,8 @@ public:
 
 template <class Registry>
 void registerRTTIModule(Registry& registry) {
-  registry.template addBuiltinModule<RTTIModule>("workerd:rtti",
-    workerd::jsg::ModuleRegistry::Type::BUILTIN);
+  registry.template addBuiltinModule<RTTIModule>(
+      "workerd:rtti", workerd::jsg::ModuleRegistry::Type::BUILTIN);
 }
 
 template <typename TypeWrapper>
@@ -45,4 +45,4 @@ kj::Own<jsg::modules::ModuleBundle> getExternalRttiModuleBundle(auto featureFlag
 
 #define EW_RTTI_ISOLATE_TYPES api::RTTIModule
 
-} // namespace workerd::api
+}  // namespace workerd::api

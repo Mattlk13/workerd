@@ -3,6 +3,8 @@
 //     https://opensource.org/licenses/Apache-2.0
 #pragma once
 
+#include <workerd/jsg/memory.h>
+
 #include <kj/common.h>
 #include <kj/exception.h>
 #include <kj/map.h>
@@ -10,11 +12,11 @@
 
 namespace workerd {
 
-template<size_t>
+template <size_t>
 class StringBuffer;
 
 class MimeType final {
-public:
+ public:
   using MimeParams = kj::HashMap<kj::String, kj::String>;
 
   enum ParseOptions {
@@ -25,17 +27,15 @@ public:
   // Returning nullptr implies that the input is not a valid mime type construction.
   // If the ParseOptions::IGNORE_PARAMS option is set then the mime type parameters
   // will be ignored and will not be included in the parsed result.
-  static kj::Maybe<MimeType> tryParse(kj::ArrayPtr<const char> input,
-                                      ParseOptions options = ParseOptions::DEFAULT);
+  static kj::Maybe<MimeType> tryParse(
+      kj::ArrayPtr<const char> input, ParseOptions options = ParseOptions::DEFAULT);
 
   // Asserts if the input could not be parsed as a valid MimeType. tryParse should
   // be preferred for most cases.
-  static MimeType parse(kj::StringPtr input,
-                        ParseOptions options = ParseOptions::DEFAULT);
+  static MimeType parse(kj::StringPtr input, ParseOptions options = ParseOptions::DEFAULT);
 
-  explicit MimeType(kj::StringPtr type,
-                    kj::StringPtr subtype,
-                    kj::Maybe<MimeParams> params = kj::none);
+  explicit MimeType(
+      kj::StringPtr type, kj::StringPtr subtype, kj::Maybe<MimeParams> params = kj::none);
 
   MimeType(MimeType&&) = default;
   MimeType& operator=(MimeType&&) = default;
@@ -104,7 +104,13 @@ public:
   // https://fetch.spec.whatwg.org/#concept-header-extract-mime-type
   static kj::Maybe<MimeType> extract(kj::StringPtr input);
 
-private:
+  void visitForMemoryInfo(jsg::MemoryTracker& tracker) const {
+    tracker.trackFieldWithSize("type", type_.size());
+    tracker.trackFieldWithSize("subtype", subtype_.size());
+    tracker.trackFieldWithSize("params", params_.size());
+  }
+
+ private:
   kj::String type_;
   kj::String subtype_;
   MimeParams params_;
@@ -114,8 +120,8 @@ private:
 
   void paramsToString(ToStringBuffer& buffer) const;
 
-  static kj::Maybe<MimeType> tryParseImpl(kj::ArrayPtr<const char> input,
-                                          ParseOptions options = ParseOptions::DEFAULT);
+  static kj::Maybe<MimeType> tryParseImpl(
+      kj::ArrayPtr<const char> input, ParseOptions options = ParseOptions::DEFAULT);
 };
 
 kj::String KJ_STRINGIFY(const MimeType& state);

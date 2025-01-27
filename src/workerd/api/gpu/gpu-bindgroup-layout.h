@@ -5,14 +5,16 @@
 #pragma once
 
 #include "gpu-utils.h"
-#include <webgpu/webgpu_cpp.h>
+
 #include <workerd/jsg/jsg.h>
+
+#include <webgpu/webgpu_cpp.h>
 
 namespace workerd::api::gpu {
 
-class GPUBindGroupLayout : public jsg::Object {
-public:
-  explicit GPUBindGroupLayout(wgpu::BindGroupLayout l) : layout_(kj::mv(l)){};
+class GPUBindGroupLayout: public jsg::Object {
+ public:
+  explicit GPUBindGroupLayout(wgpu::BindGroupLayout l): layout_(kj::mv(l)) {};
 
   // Implicit cast operator to Dawn GPU object
   inline operator const wgpu::BindGroupLayout&() const {
@@ -21,7 +23,7 @@ public:
 
   JSG_RESOURCE_TYPE(GPUBindGroupLayout) {}
 
-private:
+ private:
   wgpu::BindGroupLayout layout_;
 };
 
@@ -77,4 +79,4 @@ struct GPUBindGroupLayoutDescriptor {
 
 wgpu::BindGroupLayoutEntry parseBindGroupLayoutEntry(GPUBindGroupLayoutEntry&);
 
-} // namespace workerd::api::gpu
+}  // namespace workerd::api::gpu

@@ -3,17 +3,264 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 #include <workerd/io/trace.h>
+#include <workerd/util/thread-scopes.h>
+
+#include <openssl/rand.h>
+
 #include <capnp/message.h>
 #include <capnp/schema.h>
+#include <kj/compat/http.h>
 #include <kj/debug.h>
+#include <kj/time.h>
+
 #include <cstdlib>
 
 namespace workerd {
+
+namespace tracing {
+namespace {
+kj::Maybe<kj::uint> tryFromHexDigit(char c) {
+  if ('0' <= c && c <= '9') {
+    return c - '0';
+  } else if ('a' <= c && c <= 'f') {
+    return c - ('a' - 10);
+  } else if ('A' <= c && c <= 'F') {
+    return c - ('A' - 10);
+  } else {
+    return kj::none;
+  }
+}
+
+kj::Maybe<uint64_t> hexToUint64(kj::ArrayPtr<const char> s) {
+  KJ_ASSERT(s.size() <= 16);
+  uint64_t value = 0;
+  for (auto ch: s) {
+    KJ_IF_SOME(d, tryFromHexDigit(ch)) {
+      value = (value << 4) + d;
+    } else {
+      return kj::none;
+    }
+  }
+  return value;
+}
+
+void addHex(kj::Vector<char>& out, uint64_t v) {
+  constexpr char HEX_DIGITS[] = "0123456789abcdef";
+  for (int i = 0; i < 16; ++i) {
+    out.add(HEX_DIGITS[v >> (64 - 4)]);
+    v = v << 4;
+  }
+};
+
+void addBigEndianBytes(kj::Vector<byte>& out, uint64_t v) {
+  for (int i = 0; i < 8; ++i) {
+    out.add(v >> (64 - 8));
+    v = v << 8;
+  }
+};
+}  // namespace
+
+// Reference: https://github.com/jaegertracing/jaeger/blob/e46f8737/model/ids.go#L58
+kj::Maybe<TraceId> TraceId::fromGoString(kj::ArrayPtr<const char> s) {
+  auto n = s.size();
+  if (n > 32) {
+    return kj::none;
+  } else if (n <= 16) {
+    KJ_IF_SOME(low, hexToUint64(s)) {
+      return TraceId(low, 0);
+    }
+  } else {
+    KJ_IF_SOME(high, hexToUint64(s.slice(0, n - 16))) {
+      KJ_IF_SOME(low, hexToUint64(s.slice(n - 16, n))) {
+        return TraceId(low, high);
+      }
+    }
+  }
+  return kj::none;
+}
+
+// Reference: https://github.com/jaegertracing/jaeger/blob/e46f8737/model/ids.go#L50
+kj::String TraceId::toGoString() const {
+  if (high == 0) {
+    kj::Vector<char> s(17);
+    addHex(s, low);
+    s.add('\0');
+    return kj::String(s.releaseAsArray());
+  }
+  kj::Vector<char> s(33);
+  addHex(s, high);
+  addHex(s, low);
+  s.add('\0');
+  return kj::String(s.releaseAsArray());
+}
+
+// Reference: https://github.com/jaegertracing/jaeger/blob/e46f8737/model/ids.go#L111
+kj::Maybe<TraceId> TraceId::fromProtobuf(kj::ArrayPtr<const byte> buf) {
+  if (buf.size() != 16) {
+    return kj::none;
+  }
+  uint64_t high = 0;
+  for (auto i: kj::zeroTo(8)) {
+    high = (high << 8) + buf[i];
+  }
+  uint64_t low = 0;
+  for (auto i: kj::zeroTo(8)) {
+    low = (low << 8) + buf[i + 8];
+  }
+  return TraceId(low, high);
+}
+
+// Reference: https://github.com/jaegertracing/jaeger/blob/e46f8737/model/ids.go#L81
+kj::Array<byte> TraceId::toProtobuf() const {
+  kj::Vector<byte> s(16);
+  addBigEndianBytes(s, high);
+  addBigEndianBytes(s, low);
+  return s.releaseAsArray();
+}
+
+// Reference https://www.w3.org/TR/trace-context/#trace-id
+kj::String TraceId::toW3C() const {
+  kj::Vector<char> s(32);
+  addHex(s, high);
+  addHex(s, low);
+  return kj::str(s.releaseAsArray());
+}
+
+namespace {
+uint64_t getRandom64Bit(const kj::Maybe<kj::EntropySource&>& entropySource) {
+  uint64_t ret = 0;
+  uint8_t tries = 0;
+
+  do {
+    tries++;
+    KJ_IF_SOME(entropy, entropySource) {
+      entropy.generate(kj::arrayPtr(&ret, 1).asBytes());
+    } else {
+      KJ_ASSERT(RAND_bytes(reinterpret_cast<uint8_t*>(&ret), sizeof(ret)) == 1);
+    }
+    // On the extreme off chance that we ended with with zeroes
+    // let's try again, but only up to three times.
+  } while (ret == 0 && tries < 3);
+
+  return ret;
+}
+}  // namespace
+
+TraceId TraceId::fromEntropy(kj::Maybe<kj::EntropySource&> entropySource) {
+  if (isPredictableModeForTest()) {
+    return TraceId(0x2a2a2a2a2a2a2a2a, 0x2a2a2a2a2a2a2a2a);
+  }
+
+  return TraceId(getRandom64Bit(entropySource), getRandom64Bit(entropySource));
+}
+
+kj::String SpanId::toGoString() const {
+  kj::Vector<char> s(16);
+  addHex(s, id);
+  s.add('\0');
+  return kj::String(s.releaseAsArray());
+}
+
+SpanId SpanId::fromEntropy(kj::Maybe<kj::EntropySource&> entropySource) {
+  return SpanId(getRandom64Bit(entropySource));
+}
+
+kj::String KJ_STRINGIFY(const SpanId& id) {
+  return id;
+}
+
+kj::String KJ_STRINGIFY(const TraceId& id) {
+  return id;
+}
+
+InvocationSpanContext::InvocationSpanContext(kj::Badge<InvocationSpanContext>,
+    kj::Maybe<kj::EntropySource&> entropySource,
+    TraceId traceId,
+    TraceId invocationId,
+    SpanId spanId,
+    kj::Maybe<const InvocationSpanContext&> parentSpanContext)
+    : entropySource(entropySource),
+      traceId(kj::mv(traceId)),
+      invocationId(kj::mv(invocationId)),
+      spanId(kj::mv(spanId)),
+      parentSpanContext(parentSpanContext.map([](const InvocationSpanContext& ctx) {
+        return kj::heap<InvocationSpanContext>(ctx.clone());
+      })) {}
+
+InvocationSpanContext InvocationSpanContext::newChild() const {
+  KJ_ASSERT(!isTrigger(), "unable to create child spans on this context");
+  kj::Maybe<kj::EntropySource&> otherEntropySource = entropySource.map(
+      [](auto& es) -> kj::EntropySource& { return const_cast<kj::EntropySource&>(es); });
+  return InvocationSpanContext(kj::Badge<InvocationSpanContext>(), otherEntropySource, traceId,
+      invocationId, SpanId::fromEntropy(otherEntropySource), *this);
+}
+
+InvocationSpanContext InvocationSpanContext::newForInvocation(
+    kj::Maybe<const InvocationSpanContext&> triggerContext,
+    kj::Maybe<kj::EntropySource&> entropySource) {
+  kj::Maybe<const InvocationSpanContext&> parent;
+  auto traceId = triggerContext
+                     .map([&](auto& ctx) mutable -> TraceId {
+    parent = ctx;
+    return ctx.traceId;
+  }).orDefault([&] { return TraceId::fromEntropy(entropySource); });
+  return InvocationSpanContext(kj::Badge<InvocationSpanContext>(), entropySource, kj::mv(traceId),
+      TraceId::fromEntropy(entropySource), SpanId::fromEntropy(entropySource), kj::mv(parent));
+}
+
+TraceId TraceId::fromCapnp(rpc::InvocationSpanContext::TraceId::Reader reader) {
+  return TraceId(reader.getLow(), reader.getHigh());
+}
+
+void TraceId::toCapnp(rpc::InvocationSpanContext::TraceId::Builder writer) const {
+  writer.setLow(low);
+  writer.setHigh(high);
+}
+
+kj::Maybe<InvocationSpanContext> InvocationSpanContext::fromCapnp(
+    rpc::InvocationSpanContext::Reader reader) {
+  if (!reader.hasTraceId() || !reader.hasInvocationId()) {
+    // If the reader does not have a traceId or invocationId field then it is
+    // invalid and we will just ignore it.
+    return kj::none;
+  }
+
+  auto sc = InvocationSpanContext(kj::Badge<InvocationSpanContext>(), kj::none,
+      TraceId::fromCapnp(reader.getTraceId()), TraceId::fromCapnp(reader.getInvocationId()),
+      reader.getSpanId());
+  // If the traceId or invocationId are invalid, then we'll ignore them.
+  if (!sc.getTraceId() || !sc.getInvocationId()) return kj::none;
+  return kj::mv(sc);
+}
+
+void InvocationSpanContext::toCapnp(rpc::InvocationSpanContext::Builder writer) const {
+  traceId.toCapnp(writer.initTraceId());
+  invocationId.toCapnp(writer.initInvocationId());
+  writer.setSpanId(spanId);
+}
+
+InvocationSpanContext InvocationSpanContext::clone() const {
+  kj::Maybe<kj::EntropySource&> otherEntropySource = entropySource.map(
+      [](auto& es) -> kj::EntropySource& { return const_cast<kj::EntropySource&>(es); });
+  return InvocationSpanContext(kj::Badge<InvocationSpanContext>(), otherEntropySource, traceId,
+      invocationId, spanId,
+      parentSpanContext.map([](auto& ctx) -> const InvocationSpanContext& { return *ctx.get(); }));
+}
+
+kj::String KJ_STRINGIFY(const InvocationSpanContext& context) {
+  return kj::str(context.getTraceId(), "-", context.getInvocationId(), "-", context.getSpanId());
+}
+
+}  // namespace tracing
 
 // Approximately how much external data we allow in a trace before we start ignoring requests.  We
 // want this number to be big enough to be useful for tracing, but small enough to make it hard to
 // DoS the C++ heap -- keeping in mind we can record a trace per handler run during a request.
 static constexpr size_t MAX_TRACE_BYTES = 128 * 1024;
+// Limit spans to at most 512, it could be difficult to fit e.g. 1024 spans within MAX_TRACE_BYTES
+// unless most of the included spans do not include tags. If use cases arise where this amount is
+// insufficient, merge smaller spans together or drop smaller spans.
+static constexpr size_t MAX_USER_SPANS = 512;
 
 namespace {
 
@@ -22,23 +269,25 @@ static kj::HttpMethod validateMethod(capnp::HttpMethod method) {
   return static_cast<kj::HttpMethod>(method);
 }
 
-} // namespace
+}  // namespace
 
-Trace::FetchEventInfo::FetchEventInfo(kj::HttpMethod method, kj::String url, kj::String cfJson,
-    kj::Array<Header> headers)
-    : method(method), url(kj::mv(url)), cfJson(kj::mv(cfJson)), headers(kj::mv(headers)) {}
+tracing::FetchEventInfo::FetchEventInfo(
+    kj::HttpMethod method, kj::String url, kj::String cfJson, kj::Array<Header> headers)
+    : method(method),
+      url(kj::mv(url)),
+      cfJson(kj::mv(cfJson)),
+      headers(kj::mv(headers)) {}
 
-Trace::FetchEventInfo::FetchEventInfo(rpc::Trace::FetchEventInfo::Reader reader)
+tracing::FetchEventInfo::FetchEventInfo(rpc::Trace::FetchEventInfo::Reader reader)
     : method(validateMethod(reader.getMethod())),
       url(kj::str(reader.getUrl())),
-      cfJson(kj::str(reader.getCfJson()))
-{
+      cfJson(kj::str(reader.getCfJson())) {
   kj::Vector<Header> v;
   v.addAll(reader.getHeaders());
   headers = v.releaseAsArray();
 }
 
-void Trace::FetchEventInfo::copyTo(rpc::Trace::FetchEventInfo::Builder builder) {
+void tracing::FetchEventInfo::copyTo(rpc::Trace::FetchEventInfo::Builder builder) {
   builder.setMethod(static_cast<capnp::HttpMethod>(method));
   builder.setUrl(url);
   builder.setCfJson(cfJson);
@@ -49,141 +298,186 @@ void Trace::FetchEventInfo::copyTo(rpc::Trace::FetchEventInfo::Builder builder) 
   }
 }
 
-Trace::FetchEventInfo::Header::Header(kj::String name, kj::String value)
-    : name(kj::mv(name)), value(kj::mv(value)) {}
+tracing::FetchEventInfo tracing::FetchEventInfo::clone() {
+  return FetchEventInfo(
+      method, kj::str(url), kj::str(cfJson), KJ_MAP(h, headers) { return h.clone(); });
+}
 
-Trace::FetchEventInfo::Header::Header(rpc::Trace::FetchEventInfo::Header::Reader reader)
-    : name(kj::str(reader.getName())), value(kj::str(reader.getValue())) {}
+tracing::FetchEventInfo::Header::Header(kj::String name, kj::String value)
+    : name(kj::mv(name)),
+      value(kj::mv(value)) {}
 
-void Trace::FetchEventInfo::Header::copyTo(rpc::Trace::FetchEventInfo::Header::Builder builder) {
+tracing::FetchEventInfo::Header::Header(rpc::Trace::FetchEventInfo::Header::Reader reader)
+    : name(kj::str(reader.getName())),
+      value(kj::str(reader.getValue())) {}
+
+void tracing::FetchEventInfo::Header::copyTo(rpc::Trace::FetchEventInfo::Header::Builder builder) {
   builder.setName(name);
   builder.setValue(value);
 }
 
-Trace::JsRpcEventInfo::JsRpcEventInfo(kj::String methodName)
-    : methodName(kj::mv(methodName)) {}
+tracing::FetchEventInfo::Header tracing::FetchEventInfo::Header::clone() {
+  return Header(kj::str(name), kj::str(value));
+}
 
-Trace::JsRpcEventInfo::JsRpcEventInfo(rpc::Trace::JsRpcEventInfo::Reader reader)
+tracing::JsRpcEventInfo::JsRpcEventInfo(kj::String methodName): methodName(kj::mv(methodName)) {}
+
+tracing::JsRpcEventInfo::JsRpcEventInfo(rpc::Trace::JsRpcEventInfo::Reader reader)
     : methodName(kj::str(reader.getMethodName())) {}
 
-void Trace::JsRpcEventInfo::copyTo(rpc::Trace::JsRpcEventInfo::Builder builder) {
+void tracing::JsRpcEventInfo::copyTo(rpc::Trace::JsRpcEventInfo::Builder builder) {
   builder.setMethodName(methodName);
 }
 
-Trace::ScheduledEventInfo::ScheduledEventInfo(double scheduledTime, kj::String cron)
-    : scheduledTime(scheduledTime), cron(kj::mv(cron)) {}
+tracing::JsRpcEventInfo tracing::JsRpcEventInfo::clone() {
+  return JsRpcEventInfo(kj::str(methodName));
+}
 
-Trace::ScheduledEventInfo::ScheduledEventInfo(rpc::Trace::ScheduledEventInfo::Reader reader)
-    : scheduledTime(reader.getScheduledTime()), cron(kj::str(reader.getCron())) {}
+tracing::ScheduledEventInfo::ScheduledEventInfo(double scheduledTime, kj::String cron)
+    : scheduledTime(scheduledTime),
+      cron(kj::mv(cron)) {}
 
-void Trace::ScheduledEventInfo::copyTo(rpc::Trace::ScheduledEventInfo::Builder builder) {
+tracing::ScheduledEventInfo::ScheduledEventInfo(rpc::Trace::ScheduledEventInfo::Reader reader)
+    : scheduledTime(reader.getScheduledTime()),
+      cron(kj::str(reader.getCron())) {}
+
+void tracing::ScheduledEventInfo::copyTo(rpc::Trace::ScheduledEventInfo::Builder builder) {
   builder.setScheduledTime(scheduledTime);
   builder.setCron(cron);
 }
 
-Trace::AlarmEventInfo::AlarmEventInfo(kj::Date scheduledTime)
-    : scheduledTime(scheduledTime) {}
+tracing::ScheduledEventInfo tracing::ScheduledEventInfo::clone() {
+  return ScheduledEventInfo(scheduledTime, kj::str(cron));
+}
 
-Trace::AlarmEventInfo::AlarmEventInfo(rpc::Trace::AlarmEventInfo::Reader reader)
+tracing::AlarmEventInfo::AlarmEventInfo(kj::Date scheduledTime): scheduledTime(scheduledTime) {}
+
+tracing::AlarmEventInfo::AlarmEventInfo(rpc::Trace::AlarmEventInfo::Reader reader)
     : scheduledTime(reader.getScheduledTimeMs() * kj::MILLISECONDS + kj::UNIX_EPOCH) {}
 
-void Trace::AlarmEventInfo::copyTo(rpc::Trace::AlarmEventInfo::Builder builder) {
+void tracing::AlarmEventInfo::copyTo(rpc::Trace::AlarmEventInfo::Builder builder) {
   builder.setScheduledTimeMs((scheduledTime - kj::UNIX_EPOCH) / kj::MILLISECONDS);
 }
 
-Trace::QueueEventInfo::QueueEventInfo(kj::String queueName, uint32_t batchSize)
-    : queueName(kj::mv(queueName)), batchSize(batchSize) {}
+tracing::AlarmEventInfo tracing::AlarmEventInfo::clone() {
+  return AlarmEventInfo(scheduledTime);
+}
 
-Trace::QueueEventInfo::QueueEventInfo(rpc::Trace::QueueEventInfo::Reader reader)
-    : queueName(kj::heapString(reader.getQueueName())), batchSize(reader.getBatchSize()) {}
+tracing::QueueEventInfo::QueueEventInfo(kj::String queueName, uint32_t batchSize)
+    : queueName(kj::mv(queueName)),
+      batchSize(batchSize) {}
 
-void Trace::QueueEventInfo::copyTo(rpc::Trace::QueueEventInfo::Builder builder) {
+tracing::QueueEventInfo::QueueEventInfo(rpc::Trace::QueueEventInfo::Reader reader)
+    : queueName(kj::heapString(reader.getQueueName())),
+      batchSize(reader.getBatchSize()) {}
+
+void tracing::QueueEventInfo::copyTo(rpc::Trace::QueueEventInfo::Builder builder) {
   builder.setQueueName(queueName);
   builder.setBatchSize(batchSize);
 }
 
-Trace::EmailEventInfo::EmailEventInfo(kj::String mailFrom, kj::String rcptTo, uint32_t rawSize)
-    : mailFrom(kj::mv(mailFrom)), rcptTo(kj::mv(rcptTo)), rawSize(rawSize) {}
+tracing::QueueEventInfo tracing::QueueEventInfo::clone() {
+  return QueueEventInfo(kj::str(queueName), batchSize);
+}
 
-Trace::EmailEventInfo::EmailEventInfo(rpc::Trace::EmailEventInfo::Reader reader)
+tracing::EmailEventInfo::EmailEventInfo(kj::String mailFrom, kj::String rcptTo, uint32_t rawSize)
+    : mailFrom(kj::mv(mailFrom)),
+      rcptTo(kj::mv(rcptTo)),
+      rawSize(rawSize) {}
+
+tracing::EmailEventInfo::EmailEventInfo(rpc::Trace::EmailEventInfo::Reader reader)
     : mailFrom(kj::heapString(reader.getMailFrom())),
       rcptTo(kj::heapString(reader.getRcptTo())),
       rawSize(reader.getRawSize()) {}
 
-void Trace::EmailEventInfo::copyTo(rpc::Trace::EmailEventInfo::Builder builder) {
+void tracing::EmailEventInfo::copyTo(rpc::Trace::EmailEventInfo::Builder builder) {
   builder.setMailFrom(mailFrom);
   builder.setRcptTo(rcptTo);
   builder.setRawSize(rawSize);
 }
 
-kj::Vector<Trace::TraceEventInfo::TraceItem> getTraceItemsFromTraces(kj::ArrayPtr<kj::Own<Trace>> traces) {
-  return KJ_MAP(t, traces) -> Trace::TraceEventInfo::TraceItem {
-    return Trace::TraceEventInfo::TraceItem(t->scriptName.map([](auto& scriptName) {
-      return kj::str(scriptName);
-    }));
+tracing::EmailEventInfo tracing::EmailEventInfo::clone() {
+  return EmailEventInfo(kj::str(mailFrom), kj::str(rcptTo), rawSize);
+}
+
+kj::Vector<tracing::TraceEventInfo::TraceItem> getTraceItemsFromTraces(
+    kj::ArrayPtr<kj::Own<Trace>> traces) {
+  return KJ_MAP(t, traces) -> tracing::TraceEventInfo::TraceItem {
+    return tracing::TraceEventInfo::TraceItem(
+        t->scriptName.map([](auto& scriptName) { return kj::str(scriptName); }));
   };
 }
 
-Trace::TraceEventInfo::TraceEventInfo(kj::ArrayPtr<kj::Own<Trace>> traces)
+tracing::TraceEventInfo::TraceEventInfo(kj::ArrayPtr<kj::Own<Trace>> traces)
     : traces(getTraceItemsFromTraces(traces)) {}
 
-kj::Vector<Trace::TraceEventInfo::TraceItem> getTraceItemsFromReader(
+kj::Vector<tracing::TraceEventInfo::TraceItem> getTraceItemsFromReader(
     rpc::Trace::TraceEventInfo::Reader reader) {
-  return KJ_MAP(r, reader.getTraces()) -> Trace::TraceEventInfo::TraceItem {
-    return Trace::TraceEventInfo::TraceItem(r);
+  return KJ_MAP(r, reader.getTraces()) -> tracing::TraceEventInfo::TraceItem {
+    return tracing::TraceEventInfo::TraceItem(r);
   };
 }
 
-Trace::TraceEventInfo::TraceEventInfo(rpc::Trace::TraceEventInfo::Reader reader)
+tracing::TraceEventInfo::TraceEventInfo(rpc::Trace::TraceEventInfo::Reader reader)
     : traces(getTraceItemsFromReader(reader)) {}
 
-void Trace::TraceEventInfo::copyTo(rpc::Trace::TraceEventInfo::Builder builder) {
+void tracing::TraceEventInfo::copyTo(rpc::Trace::TraceEventInfo::Builder builder) {
   auto list = builder.initTraces(traces.size());
   for (auto i: kj::indices(traces)) {
     traces[i].copyTo(list[i]);
   }
 }
 
-Trace::TraceEventInfo::TraceItem::TraceItem(kj::Maybe<kj::String> scriptName)
+tracing::TraceEventInfo tracing::TraceEventInfo::clone() {
+  return TraceEventInfo(KJ_MAP(item, traces) { return item.clone(); });
+}
+
+tracing::TraceEventInfo::TraceItem::TraceItem(kj::Maybe<kj::String> scriptName)
     : scriptName(kj::mv(scriptName)) {}
 
-Trace::TraceEventInfo::TraceItem::TraceItem(rpc::Trace::TraceEventInfo::TraceItem::Reader reader)
+tracing::TraceEventInfo::TraceItem::TraceItem(rpc::Trace::TraceEventInfo::TraceItem::Reader reader)
     : scriptName(kj::str(reader.getScriptName())) {}
 
-void Trace::TraceEventInfo::TraceItem::copyTo(rpc::Trace::TraceEventInfo::TraceItem::Builder builder) {
+void tracing::TraceEventInfo::TraceItem::copyTo(
+    rpc::Trace::TraceEventInfo::TraceItem::Builder builder) {
   KJ_IF_SOME(name, scriptName) {
     builder.setScriptName(name);
   }
 }
 
-Trace::DiagnosticChannelEvent::DiagnosticChannelEvent(kj::Date timestamp,
-                                                      kj::String channel,
-                                                      kj::Array<kj::byte> message)
+tracing::TraceEventInfo::TraceItem tracing::TraceEventInfo::TraceItem::clone() {
+  return TraceItem(scriptName.map([](auto& name) { return kj::str(name); }));
+}
+
+tracing::DiagnosticChannelEvent::DiagnosticChannelEvent(
+    kj::Date timestamp, kj::String channel, kj::Array<kj::byte> message)
     : timestamp(timestamp),
       channel(kj::mv(channel)),
       message(kj::mv(message)) {}
 
-Trace::DiagnosticChannelEvent::DiagnosticChannelEvent(
+tracing::DiagnosticChannelEvent::DiagnosticChannelEvent(
     rpc::Trace::DiagnosticChannelEvent::Reader reader)
     : timestamp(kj::UNIX_EPOCH + reader.getTimestampNs() * kj::NANOSECONDS),
       channel(kj::heapString(reader.getChannel())),
       message(kj::heapArray<kj::byte>(reader.getMessage())) {}
 
-void Trace::DiagnosticChannelEvent::copyTo(
-    rpc::Trace::DiagnosticChannelEvent::Builder builder) {
+void tracing::DiagnosticChannelEvent::copyTo(rpc::Trace::DiagnosticChannelEvent::Builder builder) {
   builder.setTimestampNs((timestamp - kj::UNIX_EPOCH) / kj::NANOSECONDS);
   builder.setChannel(channel);
   builder.setMessage(message);
 }
 
-Trace::HibernatableWebSocketEventInfo::HibernatableWebSocketEventInfo(Type type)
-    : type(type) {}
+tracing::DiagnosticChannelEvent tracing::DiagnosticChannelEvent::clone() {
+  return DiagnosticChannelEvent(timestamp, kj::str(channel), kj::heapArray<kj::byte>(message));
+}
 
-Trace::HibernatableWebSocketEventInfo::HibernatableWebSocketEventInfo(
+tracing::HibernatableWebSocketEventInfo::HibernatableWebSocketEventInfo(Type type): type(type) {}
+
+tracing::HibernatableWebSocketEventInfo::HibernatableWebSocketEventInfo(
     rpc::Trace::HibernatableWebSocketEventInfo::Reader reader)
     : type(readFrom(reader)) {}
 
-void Trace::HibernatableWebSocketEventInfo::copyTo(
+void tracing::HibernatableWebSocketEventInfo::copyTo(
     rpc::Trace::HibernatableWebSocketEventInfo::Builder builder) {
   auto typeBuilder = builder.initType();
   KJ_SWITCH_ONEOF(type) {
@@ -201,16 +495,34 @@ void Trace::HibernatableWebSocketEventInfo::copyTo(
   }
 }
 
-Trace::HibernatableWebSocketEventInfo::Type Trace::HibernatableWebSocketEventInfo::readFrom(
+tracing::HibernatableWebSocketEventInfo tracing::HibernatableWebSocketEventInfo::clone() {
+  KJ_SWITCH_ONEOF(type) {
+    KJ_CASE_ONEOF(_, Message) {
+      return HibernatableWebSocketEventInfo(Message{});
+    }
+    KJ_CASE_ONEOF(_, Error) {
+      return HibernatableWebSocketEventInfo(Error{});
+    }
+    KJ_CASE_ONEOF(close, Close) {
+      return HibernatableWebSocketEventInfo(Close{
+        .code = close.code,
+        .wasClean = close.wasClean,
+      });
+    }
+  }
+  KJ_UNREACHABLE;
+}
+
+tracing::HibernatableWebSocketEventInfo::Type tracing::HibernatableWebSocketEventInfo::readFrom(
     rpc::Trace::HibernatableWebSocketEventInfo::Reader reader) {
   auto type = reader.getType();
-  switch(type.which()) {
+  switch (type.which()) {
     case rpc::Trace::HibernatableWebSocketEventInfo::Type::MESSAGE: {
       return Message{};
     }
     case rpc::Trace::HibernatableWebSocketEventInfo::Type::CLOSE: {
       auto close = type.getClose();
-      return Close {
+      return Close{
         .code = close.getCode(),
         .wasClean = close.getWasClean(),
       };
@@ -221,36 +533,47 @@ Trace::HibernatableWebSocketEventInfo::Type Trace::HibernatableWebSocketEventInf
   }
 }
 
-Trace::FetchResponseInfo::FetchResponseInfo(uint16_t statusCode)
-    : statusCode(statusCode) {}
+tracing::FetchResponseInfo::FetchResponseInfo(uint16_t statusCode): statusCode(statusCode) {}
 
-Trace::FetchResponseInfo::FetchResponseInfo(rpc::Trace::FetchResponseInfo::Reader reader)
+tracing::FetchResponseInfo::FetchResponseInfo(rpc::Trace::FetchResponseInfo::Reader reader)
     : statusCode(reader.getStatusCode()) {}
 
-void Trace::FetchResponseInfo::copyTo(rpc::Trace::FetchResponseInfo::Builder builder) {
+void tracing::FetchResponseInfo::copyTo(rpc::Trace::FetchResponseInfo::Builder builder) {
   builder.setStatusCode(statusCode);
 }
 
-Trace::Log::Log(kj::Date timestamp, LogLevel logLevel, kj::String message)
+tracing::FetchResponseInfo tracing::FetchResponseInfo::clone() {
+  return FetchResponseInfo(statusCode);
+}
+
+tracing::Log::Log(kj::Date timestamp, LogLevel logLevel, kj::String message)
     : timestamp(timestamp),
       logLevel(logLevel),
       message(kj::mv(message)) {}
 
-Trace::Exception::Exception(kj::Date timestamp, kj::String name, kj::String message,
-                            kj::Maybe<kj::String> stack)
-    : timestamp(timestamp), name(kj::mv(name)), message(kj::mv(message)), stack(kj::mv(stack)) {}
+tracing::Exception::Exception(
+    kj::Date timestamp, kj::String name, kj::String message, kj::Maybe<kj::String> stack)
+    : timestamp(timestamp),
+      name(kj::mv(name)),
+      message(kj::mv(message)),
+      stack(kj::mv(stack)) {}
 
-Trace::Trace(kj::Maybe<kj::String> stableId, kj::Maybe<kj::String> scriptName,
+Trace::Trace(kj::Maybe<kj::String> stableId,
+    kj::Maybe<kj::String> scriptName,
     kj::Maybe<kj::Own<ScriptVersion::Reader>> scriptVersion,
-    kj::Maybe<kj::String> dispatchNamespace, kj::Maybe<kj::String> scriptId,
-    kj::Array<kj::String> scriptTags, kj::Maybe<kj::String> entrypoint)
+    kj::Maybe<kj::String> dispatchNamespace,
+    kj::Maybe<kj::String> scriptId,
+    kj::Array<kj::String> scriptTags,
+    kj::Maybe<kj::String> entrypoint,
+    ExecutionModel executionModel)
     : stableId(kj::mv(stableId)),
       scriptName(kj::mv(scriptName)),
       scriptVersion(kj::mv(scriptVersion)),
       dispatchNamespace(kj::mv(dispatchNamespace)),
       scriptId(kj::mv(scriptId)),
       scriptTags(kj::mv(scriptTags)),
-      entrypoint(kj::mv(entrypoint)) {}
+      entrypoint(kj::mv(entrypoint)),
+      executionModel(executionModel) {}
 Trace::Trace(rpc::Trace::Reader reader) {
   mergeFrom(reader, PipelineLogLevel::FULL);
 }
@@ -262,6 +585,14 @@ void Trace::copyTo(rpc::Trace::Builder builder) {
     auto list = builder.initLogs(logs.size());
     for (auto i: kj::indices(logs)) {
       logs[i].copyTo(list[i]);
+    }
+  }
+
+  {
+    // Add spans to the builder.
+    auto list = builder.initSpans(spans.size());
+    for (auto i: kj::indices(spans)) {
+      spans[i].copyTo(list[i]);
     }
   }
 
@@ -288,6 +619,7 @@ void Trace::copyTo(rpc::Trace::Builder builder) {
   KJ_IF_SOME(ns, dispatchNamespace) {
     builder.setDispatchNamespace(ns);
   }
+  builder.setExecutionModel(executionModel);
 
   {
     auto list = builder.initScriptTags(scriptTags.size());
@@ -305,39 +637,43 @@ void Trace::copyTo(rpc::Trace::Builder builder) {
   auto eventInfoBuilder = builder.initEventInfo();
   KJ_IF_SOME(e, eventInfo) {
     KJ_SWITCH_ONEOF(e) {
-      KJ_CASE_ONEOF(fetch, FetchEventInfo) {
+      KJ_CASE_ONEOF(fetch, tracing::FetchEventInfo) {
         auto fetchBuilder = eventInfoBuilder.initFetch();
         fetch.copyTo(fetchBuilder);
       }
-      KJ_CASE_ONEOF(jsRpc, JsRpcEventInfo) {
+      KJ_CASE_ONEOF(jsRpc, tracing::JsRpcEventInfo) {
         auto jsRpcBuilder = eventInfoBuilder.initJsRpc();
         jsRpc.copyTo(jsRpcBuilder);
       }
-      KJ_CASE_ONEOF(scheduled, ScheduledEventInfo) {
+      KJ_CASE_ONEOF(scheduled, tracing::ScheduledEventInfo) {
         auto scheduledBuilder = eventInfoBuilder.initScheduled();
         scheduled.copyTo(scheduledBuilder);
       }
-      KJ_CASE_ONEOF(alarm, AlarmEventInfo) {
+      KJ_CASE_ONEOF(alarm, tracing::AlarmEventInfo) {
         auto alarmBuilder = eventInfoBuilder.initAlarm();
         alarm.copyTo(alarmBuilder);
       }
-      KJ_CASE_ONEOF(queue, QueueEventInfo) {
+      KJ_CASE_ONEOF(queue, tracing::QueueEventInfo) {
         auto queueBuilder = eventInfoBuilder.initQueue();
         queue.copyTo(queueBuilder);
       }
-      KJ_CASE_ONEOF(email, EmailEventInfo) {
+      KJ_CASE_ONEOF(email, tracing::EmailEventInfo) {
         auto emailBuilder = eventInfoBuilder.initEmail();
         email.copyTo(emailBuilder);
       }
-      KJ_CASE_ONEOF(trace, TraceEventInfo) {
+      KJ_CASE_ONEOF(trace, tracing::TraceEventInfo) {
         auto traceBuilder = eventInfoBuilder.initTrace();
         trace.copyTo(traceBuilder);
       }
-      KJ_CASE_ONEOF(hibWs, HibernatableWebSocketEventInfo) {
+      KJ_CASE_ONEOF(hibWs, tracing::HibernatableWebSocketEventInfo) {
         auto hibWsBuilder = eventInfoBuilder.initHibernatableWebSocket();
         hibWs.copyTo(hibWsBuilder);
       }
-      KJ_CASE_ONEOF(custom, CustomEventInfo) {
+      KJ_CASE_ONEOF(resume, tracing::Resume) {
+        // Resume is not used in legacy trace.
+        KJ_UNREACHABLE;
+      }
+      KJ_CASE_ONEOF(custom, tracing::CustomEventInfo) {
         eventInfoBuilder.initCustom();
       }
     }
@@ -349,15 +685,26 @@ void Trace::copyTo(rpc::Trace::Builder builder) {
     auto fetchResponseInfoBuilder = builder.initResponse();
     fetchResponseInfo.copyTo(fetchResponseInfoBuilder);
   }
+
+  {
+    auto list = builder.initDiagnosticChannelEvents(diagnosticChannelEvents.size());
+    for (auto i: kj::indices(diagnosticChannelEvents)) {
+      diagnosticChannelEvents[i].copyTo(list[i]);
+    }
+  }
 }
 
-void Trace::Log::copyTo(rpc::Trace::Log::Builder builder) {
+void tracing::Log::copyTo(rpc::Trace::Log::Builder builder) {
   builder.setTimestampNs((timestamp - kj::UNIX_EPOCH) / kj::NANOSECONDS);
   builder.setLogLevel(logLevel);
   builder.setMessage(message);
 }
 
-void Trace::Exception::copyTo(rpc::Trace::Exception::Builder builder) {
+tracing::Log tracing::Log::clone() {
+  return Log(timestamp, logLevel, kj::str(message));
+}
+
+void tracing::Exception::copyTo(rpc::Trace::Exception::Builder builder) {
   builder.setTimestampNs((timestamp - kj::UNIX_EPOCH) / kj::NANOSECONDS);
   builder.setName(name);
   builder.setMessage(message);
@@ -366,11 +713,17 @@ void Trace::Exception::copyTo(rpc::Trace::Exception::Builder builder) {
   }
 }
 
+tracing::Exception tracing::Exception::clone() {
+  return Exception(timestamp, kj::str(name), kj::str(message),
+      stack.map([](auto& stack) { return kj::str(stack); }));
+}
+
 void Trace::mergeFrom(rpc::Trace::Reader reader, PipelineLogLevel pipelineLogLevel) {
   // Sandboxed workers currently record their traces as if the pipeline log level were set to
   // "full", so we may need to filter out the extra data after receiving the traces back.
   if (pipelineLogLevel != PipelineLogLevel::NONE) {
     logs.addAll(reader.getLogs());
+    spans.addAll(reader.getSpans());
     exceptions.addAll(reader.getExceptions());
     diagnosticChannelEvents.addAll(reader.getDiagnosticChannelEvents());
   }
@@ -400,6 +753,7 @@ void Trace::mergeFrom(rpc::Trace::Reader reader, PipelineLogLevel pipelineLogLev
   if (reader.hasDispatchNamespace()) {
     dispatchNamespace = kj::str(reader.getDispatchNamespace());
   }
+  executionModel = reader.getExecutionModel();
 
   if (auto tags = reader.getScriptTags(); tags.size() > 0) {
     scriptTags = KJ_MAP(tag, tags) { return kj::str(tag); };
@@ -417,31 +771,31 @@ void Trace::mergeFrom(rpc::Trace::Reader reader, PipelineLogLevel pipelineLogLev
     auto e = reader.getEventInfo();
     switch (e.which()) {
       case rpc::Trace::EventInfo::Which::FETCH:
-        eventInfo = FetchEventInfo(e.getFetch());
+        eventInfo = tracing::FetchEventInfo(e.getFetch());
         break;
       case rpc::Trace::EventInfo::Which::JS_RPC:
-        eventInfo = JsRpcEventInfo(e.getJsRpc());
+        eventInfo = tracing::JsRpcEventInfo(e.getJsRpc());
         break;
       case rpc::Trace::EventInfo::Which::SCHEDULED:
-        eventInfo = ScheduledEventInfo(e.getScheduled());
+        eventInfo = tracing::ScheduledEventInfo(e.getScheduled());
         break;
       case rpc::Trace::EventInfo::Which::ALARM:
-        eventInfo = AlarmEventInfo(e.getAlarm());
+        eventInfo = tracing::AlarmEventInfo(e.getAlarm());
         break;
       case rpc::Trace::EventInfo::Which::QUEUE:
-        eventInfo = QueueEventInfo(e.getQueue());
+        eventInfo = tracing::QueueEventInfo(e.getQueue());
         break;
       case rpc::Trace::EventInfo::Which::EMAIL:
-        eventInfo = EmailEventInfo(e.getEmail());
+        eventInfo = tracing::EmailEventInfo(e.getEmail());
         break;
       case rpc::Trace::EventInfo::Which::TRACE:
-        eventInfo = TraceEventInfo(e.getTrace());
+        eventInfo = tracing::TraceEventInfo(e.getTrace());
         break;
       case rpc::Trace::EventInfo::Which::HIBERNATABLE_WEB_SOCKET:
-        eventInfo = HibernatableWebSocketEventInfo(e.getHibernatableWebSocket());
+        eventInfo = tracing::HibernatableWebSocketEventInfo(e.getHibernatableWebSocket());
         break;
       case rpc::Trace::EventInfo::Which::CUSTOM:
-        eventInfo = CustomEventInfo(e.getCustom());
+        eventInfo = tracing::CustomEventInfo(e.getCustom());
         break;
       case rpc::Trace::EventInfo::Which::NONE:
         eventInfo = kj::none;
@@ -450,15 +804,15 @@ void Trace::mergeFrom(rpc::Trace::Reader reader, PipelineLogLevel pipelineLogLev
   }
 
   if (reader.hasResponse()) {
-    fetchResponseInfo = FetchResponseInfo(reader.getResponse());
+    fetchResponseInfo = tracing::FetchResponseInfo(reader.getResponse());
   }
 }
 
-Trace::Log::Log(rpc::Trace::Log::Reader reader)
+tracing::Log::Log(rpc::Trace::Log::Reader reader)
     : timestamp(kj::UNIX_EPOCH + reader.getTimestampNs() * kj::NANOSECONDS),
       logLevel(reader.getLogLevel()),
       message(kj::str(reader.getMessage())) {}
-Trace::Exception::Exception(rpc::Trace::Exception::Reader reader)
+tracing::Exception::Exception(rpc::Trace::Exception::Reader reader)
     : timestamp(kj::UNIX_EPOCH + reader.getTimestampNs() * kj::NANOSECONDS),
       name(kj::str(reader.getName())),
       message(kj::str(reader.getMessage())) {
@@ -467,7 +821,764 @@ Trace::Exception::Exception(rpc::Trace::Exception::Reader reader)
   }
 }
 
-SpanBuilder& SpanBuilder::operator=(SpanBuilder &&other) {
+namespace {
+kj::Maybe<kj::Array<kj::byte>> readResumeAttachment(const auto& reader) {
+  if (reader.hasAttachment()) {
+    return kj::heapArray<kj::byte>(reader.getAttachment());
+  }
+  return kj::none;
+}
+}  // namespace
+
+tracing::Resume::Resume(kj::Maybe<kj::Array<kj::byte>> attachment)
+    : attachment(kj::mv(attachment)) {}
+
+tracing::Resume::Resume(rpc::Trace::Resume::Reader reader)
+    : attachment(readResumeAttachment(reader)) {}
+
+void tracing::Resume::copyTo(rpc::Trace::Resume::Builder builder) {
+  KJ_IF_SOME(attach, attachment) {
+    builder.setAttachment(attach);
+  }
+}
+
+tracing::Resume tracing::Resume::clone() {
+  return Resume(attachment.map([](auto& attach) { return kj::heapArray<kj::byte>(attach); }));
+}
+
+tracing::Hibernate::Hibernate() {}
+
+tracing::Hibernate::Hibernate(rpc::Trace::Hibernate::Reader reader) {}
+
+void tracing::Hibernate::copyTo(rpc::Trace::Hibernate::Builder builder) {}
+
+tracing::Hibernate tracing::Hibernate::clone() {
+  return Hibernate();
+}
+
+tracing::Attribute::Attribute(kj::String name, Value&& value)
+    : name(kj::mv(name)),
+      value(kj::arr(kj::mv(value))) {}
+
+tracing::Attribute::Attribute(kj::String name, Values&& value)
+    : name(kj::mv(name)),
+      value(kj::mv(value)) {}
+
+namespace {
+kj::Array<tracing::Attribute::Value> readValues(const rpc::Trace::Attribute::Reader& reader) {
+  static auto readValue =
+      [](rpc::Trace::Attribute::Value::Reader reader) -> tracing::Attribute::Value {
+    auto inner = reader.getInner();
+    switch (inner.which()) {
+      case rpc::Trace::Attribute::Value::Inner::TEXT: {
+        return kj::str(inner.getText());
+      }
+      case rpc::Trace::Attribute::Value::Inner::BOOL: {
+        return inner.getBool();
+      }
+      case rpc::Trace::Attribute::Value::Inner::FLOAT: {
+        return inner.getFloat();
+      }
+      case rpc::Trace::Attribute::Value::Inner::INT: {
+        return static_cast<int32_t>(inner.getInt());
+      }
+    }
+    KJ_UNREACHABLE;
+  };
+
+  // There should always be a value and it always have at least one entry in the list.
+  KJ_ASSERT(reader.hasValue());
+  auto value = reader.getValue();
+  kj::Vector<tracing::Attribute::Value> values(value.size());
+  for (auto v: value) {
+    values.add(readValue(v));
+  }
+  return values.releaseAsArray();
+}
+}  // namespace
+
+tracing::Attribute::Attribute(rpc::Trace::Attribute::Reader reader)
+    : name(kj::str(reader.getName())),
+      value(readValues(reader)) {}
+
+void tracing::Attribute::copyTo(rpc::Trace::Attribute::Builder builder) {
+  static auto writeValue = [](auto builder, const auto& value) mutable {
+    KJ_SWITCH_ONEOF(value) {
+      KJ_CASE_ONEOF(str, kj::String) {
+        builder.initInner().setText(str.asPtr());
+      }
+      KJ_CASE_ONEOF(b, bool) {
+        builder.initInner().setBool(b);
+      }
+      KJ_CASE_ONEOF(f, double) {
+        builder.initInner().setFloat(f);
+      }
+      KJ_CASE_ONEOF(i, int32_t) {
+        builder.initInner().setInt(i);
+      }
+    }
+  };
+  builder.setName(name.asPtr());
+  auto vec = builder.initValue(value.size());
+  for (size_t n = 0; n < value.size(); n++) {
+    writeValue(vec[n], value[n]);
+  }
+}
+
+tracing::Attribute tracing::Attribute::clone() {
+  constexpr auto cloneValue = [](const Value& value) -> Value {
+    KJ_SWITCH_ONEOF(value) {
+      KJ_CASE_ONEOF(str, kj::String) {
+        return kj::str(str);
+      }
+      KJ_CASE_ONEOF(b, bool) {
+        return b;
+      }
+      KJ_CASE_ONEOF(f, double) {
+        return f;
+      }
+      KJ_CASE_ONEOF(i, int32_t) {
+        return i;
+      }
+    }
+    KJ_UNREACHABLE;
+  };
+
+  return Attribute(kj::str(name), KJ_MAP(v, value) { return cloneValue(v); });
+}
+
+tracing::Return::Return(kj::Maybe<tracing::Return::Info> info): info(kj::mv(info)) {}
+
+namespace {
+kj::Maybe<tracing::Return::Info> readReturnInfo(const rpc::Trace::Return::Reader& reader) {
+  auto info = reader.getInfo();
+  switch (info.which()) {
+    case rpc::Trace::Return::Info::EMPTY:
+      return kj::none;
+    case rpc::Trace::Return::Info::CUSTOM: {
+      auto list = info.getCustom();
+      kj::Vector<tracing::Attribute> attrs(list.size());
+      for (size_t n = 0; n < list.size(); n++) {
+        attrs.add(tracing::Attribute(list[n]));
+      }
+      return kj::Maybe(attrs.releaseAsArray());
+    }
+    case rpc::Trace::Return::Info::FETCH: {
+      return kj::Maybe(tracing::FetchResponseInfo(info.getFetch()));
+    }
+  }
+  KJ_UNREACHABLE;
+}
+}  // namespace
+
+tracing::Return::Return(rpc::Trace::Return::Reader reader): info(readReturnInfo(reader)) {}
+
+void tracing::Return::copyTo(rpc::Trace::Return::Builder builder) {
+  KJ_IF_SOME(i, info) {
+    auto infoBuilder = builder.initInfo();
+    KJ_SWITCH_ONEOF(i) {
+      KJ_CASE_ONEOF(fetch, tracing::FetchResponseInfo) {
+        fetch.copyTo(infoBuilder.initFetch());
+      }
+      KJ_CASE_ONEOF(custom, tracing::CustomInfo) {
+        auto attributes = infoBuilder.initCustom(custom.size());
+        for (size_t n = 0; n < custom.size(); n++) {
+          custom[n].copyTo(attributes[n]);
+        }
+      }
+    }
+  }
+}
+
+tracing::Return tracing::Return::clone() {
+  KJ_IF_SOME(i, info) {
+    KJ_SWITCH_ONEOF(i) {
+      KJ_CASE_ONEOF(fetch, tracing::FetchResponseInfo) {
+        return Return(kj::Maybe(fetch.clone()));
+      }
+      KJ_CASE_ONEOF(custom, tracing::CustomInfo) {
+        return Return(kj::Maybe(KJ_MAP(i, custom) { return i.clone(); }));
+      }
+    }
+    KJ_UNREACHABLE;
+  }
+  return Return();
+}
+
+tracing::SpanOpen::SpanOpen(kj::Maybe<kj::String> operationName, kj::Maybe<Info> info)
+    : operationName(kj::mv(operationName)),
+      info(kj::mv(info)) {}
+
+namespace {
+kj::Maybe<kj::String> readSpanOpenOperationName(const rpc::Trace::SpanOpen::Reader& reader) {
+  if (!reader.hasOperationName()) return kj::none;
+  return kj::str(reader.getOperationName());
+}
+
+kj::Maybe<tracing::SpanOpen::Info> readSpanOpenInfo(rpc::Trace::SpanOpen::Reader& reader) {
+  auto info = reader.getInfo();
+  switch (info.which()) {
+    case rpc::Trace::SpanOpen::Info::EMPTY:
+      return kj::none;
+    case rpc::Trace::SpanOpen::Info::FETCH: {
+      return kj::Maybe(tracing::FetchEventInfo(info.getFetch()));
+    }
+    case rpc::Trace::SpanOpen::Info::JSRPC: {
+      return kj::Maybe(tracing::JsRpcEventInfo(info.getJsrpc()));
+    }
+    case rpc::Trace::SpanOpen::Info::CUSTOM: {
+      auto custom = info.getCustom();
+      kj::Vector<tracing::Attribute> attrs(custom.size());
+      for (size_t n = 0; n < custom.size(); n++) {
+        attrs.add(tracing::Attribute(custom[n]));
+      }
+      return kj::Maybe(attrs.releaseAsArray());
+    }
+  }
+  KJ_UNREACHABLE;
+}
+}  // namespace
+
+tracing::SpanOpen::SpanOpen(rpc::Trace::SpanOpen::Reader reader)
+    : operationName(readSpanOpenOperationName(reader)),
+      info(readSpanOpenInfo(reader)) {}
+
+void tracing::SpanOpen::copyTo(rpc::Trace::SpanOpen::Builder builder) {
+  KJ_IF_SOME(name, operationName) {
+    builder.setOperationName(name.asPtr());
+  }
+  KJ_IF_SOME(i, info) {
+    auto infoBuilder = builder.initInfo();
+    KJ_SWITCH_ONEOF(i) {
+      KJ_CASE_ONEOF(fetch, tracing::FetchEventInfo) {
+        fetch.copyTo(infoBuilder.initFetch());
+      }
+      KJ_CASE_ONEOF(jsrpc, tracing::JsRpcEventInfo) {
+        jsrpc.copyTo(infoBuilder.initJsrpc());
+      }
+      KJ_CASE_ONEOF(custom, tracing::CustomInfo) {
+        auto customBuilder = infoBuilder.initCustom(custom.size());
+        for (size_t n = 0; n < custom.size(); n++) {
+          custom[n].copyTo(customBuilder[n]);
+        }
+      }
+    }
+  }
+}
+
+tracing::SpanOpen tracing::SpanOpen::clone() {
+  constexpr auto cloneInfo = [](kj::Maybe<Info>& info) -> kj::Maybe<tracing::SpanOpen::Info> {
+    return info.map([](Info& info) -> tracing::SpanOpen::Info {
+      KJ_SWITCH_ONEOF(info) {
+        KJ_CASE_ONEOF(fetch, tracing::FetchEventInfo) {
+          return fetch.clone();
+        }
+        KJ_CASE_ONEOF(jsrpc, tracing::JsRpcEventInfo) {
+          return jsrpc.clone();
+        }
+        KJ_CASE_ONEOF(custom, tracing::CustomInfo) {
+          kj::Vector<tracing::Attribute> attrs(custom.size());
+          for (size_t n = 0; n < custom.size(); n++) {
+            attrs.add(custom[n].clone());
+          }
+          return attrs.releaseAsArray();
+        }
+      }
+      KJ_UNREACHABLE;
+    });
+  };
+  return SpanOpen(operationName.map([](auto& str) { return kj::str(str); }), cloneInfo(info));
+}
+
+tracing::SpanClose::SpanClose(EventOutcome outcome): outcome(outcome) {}
+
+tracing::SpanClose::SpanClose(rpc::Trace::SpanClose::Reader reader): outcome(reader.getOutcome()) {}
+
+void tracing::SpanClose::copyTo(rpc::Trace::SpanClose::Builder builder) {
+  builder.setOutcome(outcome);
+}
+
+tracing::SpanClose tracing::SpanClose::clone() {
+  return SpanClose(outcome);
+}
+
+namespace {
+kj::Maybe<kj::String> readLabelFromReader(const rpc::Trace::Link::Reader& reader) {
+  if (!reader.hasLabel()) return kj::none;
+  return kj::str(reader.getLabel());
+}
+tracing::TraceId readTraceIdFromReader(const rpc::Trace::Link::Reader& reader) {
+  KJ_ASSERT(reader.hasContext());
+  auto context = reader.getContext();
+  return tracing::TraceId::fromCapnp(context.getTraceId());
+}
+tracing::TraceId readInvocationIdFromReader(const rpc::Trace::Link::Reader& reader) {
+  KJ_ASSERT(reader.hasContext());
+  auto context = reader.getContext();
+  return tracing::TraceId::fromCapnp(context.getInvocationId());
+}
+tracing::SpanId readSpanIdFromReader(const rpc::Trace::Link::Reader& reader) {
+  KJ_ASSERT(reader.hasContext());
+  auto context = reader.getContext();
+  return tracing::SpanId(context.getSpanId());
+}
+}  // namespace
+
+tracing::Link::Link(const InvocationSpanContext& other, kj::Maybe<kj::String> label)
+    : Link(kj::mv(label), other.getTraceId(), other.getInvocationId(), other.getSpanId()) {}
+
+tracing::Link::Link(
+    kj::Maybe<kj::String> label, TraceId traceId, TraceId invocationId, SpanId spanId)
+    : label(kj::mv(label)),
+      traceId(kj::mv(traceId)),
+      invocationId(kj::mv(invocationId)),
+      spanId(kj::mv(spanId)) {}
+
+tracing::Link::Link(rpc::Trace::Link::Reader reader)
+    : label(readLabelFromReader(reader)),
+      traceId(readTraceIdFromReader(reader)),
+      invocationId(readInvocationIdFromReader(reader)),
+      spanId(readSpanIdFromReader(reader)) {}
+
+void tracing::Link::copyTo(rpc::Trace::Link::Builder builder) {
+  KJ_IF_SOME(l, label) {
+    builder.setLabel(l);
+  }
+  auto ctx = builder.initContext();
+  traceId.toCapnp(ctx.initTraceId());
+  invocationId.toCapnp(ctx.initInvocationId());
+  ctx.setSpanId(spanId.getId());
+}
+
+tracing::Link tracing::Link::clone() {
+  return Link(
+      label.map([](kj::String& str) { return kj::str(str); }), traceId, invocationId, spanId);
+}
+
+namespace {
+tracing::Onset::Info getInfoFromReader(const rpc::Trace::Onset::Reader& reader) {
+  auto info = reader.getInfo();
+  switch (info.which()) {
+    case rpc::Trace::Onset::Info::FETCH: {
+      return tracing::FetchEventInfo(info.getFetch());
+    }
+    case rpc::Trace::Onset::Info::JSRPC: {
+      return tracing::JsRpcEventInfo(info.getJsrpc());
+    }
+    case rpc::Trace::Onset::Info::SCHEDULED: {
+      return tracing::ScheduledEventInfo(info.getScheduled());
+    }
+    case rpc::Trace::Onset::Info::ALARM: {
+      return tracing::AlarmEventInfo(info.getAlarm());
+    }
+    case rpc::Trace::Onset::Info::QUEUE: {
+      return tracing::QueueEventInfo(info.getQueue());
+    }
+    case rpc::Trace::Onset::Info::EMAIL: {
+      return tracing::EmailEventInfo(info.getEmail());
+    }
+    case rpc::Trace::Onset::Info::TRACE: {
+      return tracing::TraceEventInfo(info.getTrace());
+    }
+    case rpc::Trace::Onset::Info::HIBERNATABLE_WEB_SOCKET: {
+      return tracing::HibernatableWebSocketEventInfo(info.getHibernatableWebSocket());
+    }
+    case rpc::Trace::Onset::Info::RESUME: {
+      return tracing::Resume(info.getResume());
+    }
+    case rpc::Trace::Onset::Info::CUSTOM: {
+      return tracing::CustomEventInfo();
+    }
+  }
+  KJ_UNREACHABLE;
+}
+
+kj::Maybe<kj::String> getScriptNameFromReader(const rpc::Trace::Onset::Reader& reader) {
+  if (reader.hasScriptName()) {
+    return kj::str(reader.getScriptName());
+  }
+  return kj::none;
+}
+
+kj::Maybe<kj::Own<ScriptVersion::Reader>> getScriptVersionFromReader(
+    const rpc::Trace::Onset::Reader& reader) {
+  if (reader.hasScriptVersion()) {
+    return capnp::clone(reader.getScriptVersion());
+  }
+  return kj::none;
+}
+
+kj::Maybe<kj::String> getDispatchNamespaceFromReader(const rpc::Trace::Onset::Reader& reader) {
+  if (reader.hasDispatchNamespace()) {
+    return kj::str(reader.getDispatchNamespace());
+  }
+  return kj::none;
+}
+
+kj::Maybe<kj::Array<kj::String>> getScriptTagsFromReader(const rpc::Trace::Onset::Reader& reader) {
+  if (reader.hasScriptTags()) {
+    auto tags = reader.getScriptTags();
+    kj::Vector<kj::String> scriptTags(tags.size());
+    for (size_t i = 0; i < tags.size(); i++) {
+      scriptTags.add(kj::str(tags[i]));
+    }
+    return kj::Maybe(scriptTags.releaseAsArray());
+  }
+  return kj::none;
+}
+
+kj::Maybe<kj::String> getEntrypointFromReader(const rpc::Trace::Onset::Reader& reader) {
+  if (reader.hasEntryPoint()) {
+    return kj::str(reader.getEntryPoint());
+  }
+  return kj::none;
+}
+kj::Maybe<tracing::Onset::TriggerContext> getTriggerContextFromReader(
+    const rpc::Trace::Onset::Reader& reader) {
+  if (!reader.hasTrigger()) return kj::none;
+  auto trigger = reader.getTrigger();
+  return tracing::Onset::TriggerContext(tracing::TraceId::fromCapnp(trigger.getTraceId()),
+      tracing::TraceId::fromCapnp(trigger.getInvocationId()), tracing::SpanId(trigger.getSpanId()));
+}
+tracing::Onset::WorkerInfo getWorkerInfoFromReader(const rpc::Trace::Onset::Reader& reader) {
+  return tracing::Onset::WorkerInfo{
+    .executionModel = reader.getExecutionModel(),
+    .scriptName = getScriptNameFromReader(reader),
+    .scriptVersion = getScriptVersionFromReader(reader),
+    .dispatchNamespace = getDispatchNamespaceFromReader(reader),
+    .scriptTags = getScriptTagsFromReader(reader),
+    .entrypoint = getEntrypointFromReader(reader),
+  };
+}
+}  // namespace
+
+tracing::Onset::Onset(tracing::Onset::Info&& info,
+    tracing::Onset::WorkerInfo&& workerInfo,
+    kj::Maybe<TriggerContext> maybeTrigger)
+    : info(kj::mv(info)),
+      workerInfo(kj::mv(workerInfo)),
+      trigger(kj::mv(maybeTrigger)) {}
+
+tracing::Onset::Onset(rpc::Trace::Onset::Reader reader)
+    : info(getInfoFromReader(reader)),
+      workerInfo(getWorkerInfoFromReader(reader)),
+      trigger(getTriggerContextFromReader(reader)) {}
+
+void tracing::Onset::copyTo(rpc::Trace::Onset::Builder builder) {
+  builder.setExecutionModel(workerInfo.executionModel);
+  KJ_IF_SOME(name, workerInfo.scriptName) {
+    builder.setScriptName(name);
+  }
+  KJ_IF_SOME(version, workerInfo.scriptVersion) {
+    builder.setScriptVersion(*version);
+  }
+  KJ_IF_SOME(name, workerInfo.dispatchNamespace) {
+    builder.setDispatchNamespace(name);
+  }
+  KJ_IF_SOME(tags, workerInfo.scriptTags) {
+    auto list = builder.initScriptTags(tags.size());
+    for (size_t i = 0; i < tags.size(); i++) {
+      list.set(i, tags[i]);
+    }
+  }
+  KJ_IF_SOME(e, workerInfo.entrypoint) {
+    builder.setEntryPoint(e);
+  }
+  KJ_IF_SOME(t, trigger) {
+    auto ctx = builder.initTrigger();
+    t.traceId.toCapnp(ctx.initTraceId());
+    t.invocationId.toCapnp(ctx.getInvocationId());
+    ctx.setSpanId(t.spanId.getId());
+  }
+  auto infoBuilder = builder.initInfo();
+  KJ_SWITCH_ONEOF(info) {
+    KJ_CASE_ONEOF(fetch, FetchEventInfo) {
+      fetch.copyTo(infoBuilder.initFetch());
+    }
+    KJ_CASE_ONEOF(jsrpc, JsRpcEventInfo) {
+      jsrpc.copyTo(infoBuilder.initJsrpc());
+    }
+    KJ_CASE_ONEOF(scheduled, ScheduledEventInfo) {
+      scheduled.copyTo(infoBuilder.initScheduled());
+    }
+    KJ_CASE_ONEOF(alarm, AlarmEventInfo) {
+      alarm.copyTo(infoBuilder.initAlarm());
+    }
+    KJ_CASE_ONEOF(queue, QueueEventInfo) {
+      queue.copyTo(infoBuilder.initQueue());
+    }
+    KJ_CASE_ONEOF(email, EmailEventInfo) {
+      email.copyTo(infoBuilder.initEmail());
+    }
+    KJ_CASE_ONEOF(trace, TraceEventInfo) {
+      trace.copyTo(infoBuilder.initTrace());
+    }
+    KJ_CASE_ONEOF(hws, HibernatableWebSocketEventInfo) {
+      hws.copyTo(infoBuilder.initHibernatableWebSocket());
+    }
+    KJ_CASE_ONEOF(resume, Resume) {
+      resume.copyTo(infoBuilder.initResume());
+    }
+    KJ_CASE_ONEOF(custom, CustomEventInfo) {
+      infoBuilder.initCustom();
+    }
+  }
+}
+
+tracing::Onset::WorkerInfo tracing::Onset::WorkerInfo::clone() const {
+  return WorkerInfo{
+    .executionModel = executionModel,
+    .scriptName = scriptName.map([](auto& str) { return kj::str(str); }),
+    .scriptVersion = scriptVersion.map([](auto& version) { return capnp::clone(*version); }),
+    .dispatchNamespace = dispatchNamespace.map([](auto& str) { return kj::str(str); }),
+    .scriptTags =
+        scriptTags.map([](auto& tags) { return KJ_MAP(tag, tags) { return kj::str(tag); }; }),
+    .entrypoint = entrypoint.map([](auto& str) { return kj::str(str); }),
+  };
+}
+
+tracing::Onset tracing::Onset::clone() {
+  constexpr auto cloneInfo = [](Info& info) -> tracing::Onset::Info {
+    KJ_SWITCH_ONEOF(info) {
+      KJ_CASE_ONEOF(fetch, FetchEventInfo) {
+        return fetch.clone();
+      }
+      KJ_CASE_ONEOF(jsrpc, JsRpcEventInfo) {
+        return jsrpc.clone();
+      }
+      KJ_CASE_ONEOF(scheduled, ScheduledEventInfo) {
+        return scheduled.clone();
+      }
+      KJ_CASE_ONEOF(alarm, AlarmEventInfo) {
+        return alarm.clone();
+      }
+      KJ_CASE_ONEOF(queue, QueueEventInfo) {
+        return queue.clone();
+      }
+      KJ_CASE_ONEOF(email, EmailEventInfo) {
+        return email.clone();
+      }
+      KJ_CASE_ONEOF(trace, TraceEventInfo) {
+        return trace.clone();
+      }
+      KJ_CASE_ONEOF(hws, HibernatableWebSocketEventInfo) {
+        return hws.clone();
+      }
+      KJ_CASE_ONEOF(resume, Resume) {
+        return resume.clone();
+      }
+      KJ_CASE_ONEOF(custom, CustomEventInfo) {
+        return CustomEventInfo();
+      }
+    }
+    KJ_UNREACHABLE;
+  };
+  return Onset(cloneInfo(info), workerInfo.clone(), trigger.map([](TriggerContext& ctx) {
+    return TriggerContext(ctx.traceId, ctx.invocationId, ctx.spanId);
+  }));
+}
+
+tracing::Outcome::Outcome(EventOutcome outcome, kj::Duration cpuTime, kj::Duration wallTime)
+    : outcome(outcome),
+      cpuTime(cpuTime),
+      wallTime(wallTime) {}
+
+tracing::Outcome::Outcome(rpc::Trace::Outcome::Reader reader)
+    : outcome(reader.getOutcome()),
+      cpuTime(reader.getCpuTime() * kj::MILLISECONDS),
+      wallTime(reader.getWallTime() * kj::MILLISECONDS) {}
+
+void tracing::Outcome::copyTo(rpc::Trace::Outcome::Builder builder) {
+  builder.setOutcome(outcome);
+  builder.setCpuTime(cpuTime / kj::MILLISECONDS);
+  builder.setWallTime(wallTime / kj::MILLISECONDS);
+}
+
+tracing::Outcome tracing::Outcome::clone() {
+  return Outcome(outcome, cpuTime, wallTime);
+}
+
+tracing::TailEvent::TailEvent(const tracing::InvocationSpanContext& context,
+    kj::Date timestamp,
+    kj::uint sequence,
+    Event&& event)
+    : traceId(context.getTraceId()),
+      invocationId(context.getInvocationId()),
+      spanId(context.getSpanId()),
+      timestamp(timestamp),
+      sequence(sequence),
+      event(kj::mv(event)) {}
+
+tracing::TailEvent::TailEvent(TraceId traceId,
+    TraceId invocationId,
+    SpanId spanId,
+    kj::Date timestamp,
+    kj::uint sequence,
+    Event&& event)
+    : traceId(kj::mv(traceId)),
+      invocationId(kj::mv(invocationId)),
+      spanId(kj::mv(spanId)),
+      timestamp(timestamp),
+      sequence(sequence),
+      event(kj::mv(event)) {}
+
+namespace {
+tracing::TailEvent::Event readEventFromTailEvent(const rpc::Trace::TailEvent::Reader& reader) {
+  const auto event = reader.getEvent();
+  switch (event.which()) {
+    case rpc::Trace::TailEvent::Event::ONSET: {
+      return tracing::Onset(event.getOnset());
+    }
+    case rpc::Trace::TailEvent::Event::OUTCOME: {
+      return tracing::Outcome(event.getOutcome());
+    }
+    case rpc::Trace::TailEvent::Event::HIBERNATE: {
+      return tracing::Hibernate(event.getHibernate());
+    }
+    case rpc::Trace::TailEvent::Event::SPAN_OPEN: {
+      return tracing::SpanOpen(event.getSpanOpen());
+    }
+    case rpc::Trace::TailEvent::Event::SPAN_CLOSE: {
+      return tracing::SpanClose(event.getSpanClose());
+    }
+    case rpc::Trace::TailEvent::Event::ATTRIBUTE: {
+      auto listReader = event.getAttribute();
+      kj::Vector<tracing::Attribute> attrs(listReader.size());
+      for (size_t n = 0; n < listReader.size(); n++) {
+        attrs.add(tracing::Attribute(listReader[n]));
+      }
+      return tracing::Mark(attrs.releaseAsArray());
+    }
+    case rpc::Trace::TailEvent::Event::RETURN: {
+      return tracing::Mark(tracing::Return(event.getReturn()));
+    }
+    case rpc::Trace::TailEvent::Event::DIAGNOSTIC_CHANNEL_EVENT: {
+      return tracing::Mark(tracing::DiagnosticChannelEvent(event.getDiagnosticChannelEvent()));
+    }
+    case rpc::Trace::TailEvent::Event::EXCEPTION: {
+      return tracing::Mark(tracing::Exception(event.getException()));
+    }
+    case rpc::Trace::TailEvent::Event::LOG: {
+      return tracing::Mark(tracing::Log(event.getLog()));
+    }
+    case rpc::Trace::TailEvent::Event::LINK: {
+      return tracing::Mark(tracing::Link(event.getLink()));
+    }
+  }
+  KJ_UNREACHABLE;
+}
+}  // namespace
+
+tracing::TailEvent::TailEvent(rpc::Trace::TailEvent::Reader reader)
+    : traceId(TraceId::fromCapnp(reader.getContext().getTraceId())),
+      invocationId(TraceId::fromCapnp(reader.getContext().getInvocationId())),
+      spanId(SpanId(reader.getContext().getSpanId())),
+      timestamp(kj::UNIX_EPOCH + reader.getTimestampNs() * kj::NANOSECONDS),
+      sequence(reader.getSequence()),
+      event(readEventFromTailEvent(reader)) {}
+
+void tracing::TailEvent::copyTo(rpc::Trace::TailEvent::Builder builder) {
+  auto context = builder.initContext();
+  traceId.toCapnp(context.initTraceId());
+  invocationId.toCapnp(context.initInvocationId());
+  context.setSpanId(spanId.getId());
+  builder.setTimestampNs((timestamp - kj::UNIX_EPOCH) / kj::NANOSECONDS);
+  builder.setSequence(sequence);
+  auto eventBuilder = builder.initEvent();
+  KJ_SWITCH_ONEOF(event) {
+    KJ_CASE_ONEOF(onset, Onset) {
+      onset.copyTo(eventBuilder.initOnset());
+    }
+    KJ_CASE_ONEOF(outcome, Outcome) {
+      outcome.copyTo(eventBuilder.initOutcome());
+    }
+    KJ_CASE_ONEOF(hibernate, Hibernate) {
+      hibernate.copyTo(eventBuilder.initHibernate());
+    }
+    KJ_CASE_ONEOF(open, SpanOpen) {
+      open.copyTo(eventBuilder.initSpanOpen());
+    }
+    KJ_CASE_ONEOF(close, SpanClose) {
+      close.copyTo(eventBuilder.initSpanClose());
+    }
+    KJ_CASE_ONEOF(mark, Mark) {
+      KJ_SWITCH_ONEOF(mark) {
+        KJ_CASE_ONEOF(diag, DiagnosticChannelEvent) {
+          diag.copyTo(eventBuilder.initDiagnosticChannelEvent());
+        }
+        KJ_CASE_ONEOF(ex, Exception) {
+          ex.copyTo(eventBuilder.initException());
+        }
+        KJ_CASE_ONEOF(log, Log) {
+          log.copyTo(eventBuilder.initLog());
+        }
+        KJ_CASE_ONEOF(ret, Return) {
+          ret.copyTo(eventBuilder.initReturn());
+        }
+        KJ_CASE_ONEOF(link, Link) {
+          link.copyTo(eventBuilder.initLink());
+        }
+        KJ_CASE_ONEOF(attrs, kj::Array<Attribute>) {
+          // Mark is a collection of attributes.
+          auto attrBuilder = eventBuilder.initAttribute(attrs.size());
+          for (size_t n = 0; n < attrs.size(); n++) {
+            attrs[n].copyTo(attrBuilder[n]);
+          }
+        }
+      }
+    }
+  }
+}
+
+tracing::TailEvent tracing::TailEvent::clone() {
+  constexpr auto cloneEvent = [](Event& event) -> Event {
+    KJ_SWITCH_ONEOF(event) {
+      KJ_CASE_ONEOF(onset, Onset) {
+        return onset.clone();
+      }
+      KJ_CASE_ONEOF(outcome, Outcome) {
+        return outcome.clone();
+      }
+      KJ_CASE_ONEOF(hibernate, Hibernate) {
+        return hibernate.clone();
+      }
+      KJ_CASE_ONEOF(open, SpanOpen) {
+        return open.clone();
+      }
+      KJ_CASE_ONEOF(close, SpanClose) {
+        return close.clone();
+      }
+      KJ_CASE_ONEOF(mark, Mark) {
+        KJ_SWITCH_ONEOF(mark) {
+          KJ_CASE_ONEOF(diag, DiagnosticChannelEvent) {
+            return Mark(diag.clone());
+          }
+          KJ_CASE_ONEOF(ex, Exception) {
+            return Mark(ex.clone());
+          }
+          KJ_CASE_ONEOF(log, Log) {
+            return Mark(log.clone());
+          }
+          KJ_CASE_ONEOF(ret, Return) {
+            return Mark(ret.clone());
+          }
+          KJ_CASE_ONEOF(link, Link) {
+            return Mark(link.clone());
+          }
+          KJ_CASE_ONEOF(attrs, tracing::CustomInfo) {
+            return Mark(KJ_MAP(attr, attrs) { return attr.clone(); });
+          }
+        }
+      }
+    }
+    KJ_UNREACHABLE;
+  };
+  return TailEvent(traceId, invocationId, spanId, timestamp, sequence, cloneEvent(event));
+}
+
+// ======================================================================================
+
+SpanBuilder& SpanBuilder::operator=(SpanBuilder&& other) {
   end();
   observer = kj::mv(other.observer);
   span = kj::mv(other.span);
@@ -497,7 +1608,8 @@ void SpanBuilder::setOperationName(kj::ConstString operationName) {
 void SpanBuilder::setTag(kj::ConstString key, TagValue value) {
   KJ_IF_SOME(s, span) {
     auto keyPtr = key.asPtr();
-    s.tags.upsert(kj::mv(key), kj::mv(value), [keyPtr](TagValue& existingValue, TagValue&& newValue) {
+    s.tags.upsert(
+        kj::mv(key), kj::mv(value), [keyPtr](TagValue& existingValue, TagValue&& newValue) {
       // This is a programming error, but not a serious one. We could alternatively just emit
       // duplicate tags and leave the Jaeger UI in charge of warning about them.
       [[maybe_unused]] static auto logged = [keyPtr]() {
@@ -514,25 +1626,24 @@ void SpanBuilder::addLog(kj::Date timestamp, kj::ConstString key, TagValue value
     if (s.logs.size() >= Span::MAX_LOGS) {
       ++s.droppedLogs;
     } else {
-      s.logs.add(Span::Log {
-        .timestamp = timestamp,
+      s.logs.add(Span::Log{.timestamp = timestamp,
         .tag = {
           .key = kj::mv(key),
           .value = kj::mv(value),
-        }
-      });
+        }});
     }
   }
 }
 
 PipelineTracer::~PipelineTracer() noexcept(false) {
-  KJ_IF_SOME(p, parentTracer) {
-    for (auto& t: traces) {
-      p->traces.add(kj::addRef(*t));
-    }
-  }
   KJ_IF_SOME(f, completeFulfiller) {
     f.get()->fulfill(traces.releaseAsArray());
+  }
+}
+
+void PipelineTracer::addTracesFromChild(kj::ArrayPtr<kj::Own<Trace>> traces) {
+  for (auto& t: traces) {
+    this->traces.add(kj::addRef(*t));
   }
 }
 
@@ -544,48 +1655,209 @@ kj::Promise<kj::Array<kj::Own<Trace>>> PipelineTracer::onComplete() {
   return kj::mv(paf.promise);
 }
 
-kj::Own<WorkerTracer> PipelineTracer::makeWorkerTracer(
-    PipelineLogLevel pipelineLogLevel, kj::Maybe<kj::String> scriptId, kj::Maybe<kj::String> stableId,
-    kj::Maybe<kj::String> scriptName, kj::Maybe<kj::Own<ScriptVersion::Reader>> scriptVersion,
-    kj::Maybe<kj::String> dispatchNamespace, kj::Array<kj::String> scriptTags,
+kj::Own<WorkerTracer> PipelineTracer::makeWorkerTracer(PipelineLogLevel pipelineLogLevel,
+    ExecutionModel executionModel,
+    kj::Maybe<kj::String> scriptId,
+    kj::Maybe<kj::String> stableId,
+    kj::Maybe<kj::String> scriptName,
+    kj::Maybe<kj::Own<ScriptVersion::Reader>> scriptVersion,
+    kj::Maybe<kj::String> dispatchNamespace,
+    kj::Array<kj::String> scriptTags,
     kj::Maybe<kj::String> entrypoint) {
   auto trace = kj::refcounted<Trace>(kj::mv(stableId), kj::mv(scriptName), kj::mv(scriptVersion),
-      kj::mv(dispatchNamespace), kj::mv(scriptId), kj::mv(scriptTags), kj::mv(entrypoint));
+      kj::mv(dispatchNamespace), kj::mv(scriptId), kj::mv(scriptTags), kj::mv(entrypoint),
+      executionModel);
   traces.add(kj::addRef(*trace));
-  return kj::refcounted<WorkerTracer>(kj::addRef(*this), kj::mv(trace), pipelineLogLevel);
+  return kj::refcounted<WorkerTracer>(addRefToThis(), kj::mv(trace), pipelineLogLevel);
 }
 
-WorkerTracer::WorkerTracer(kj::Own<PipelineTracer> parentPipeline,
-      kj::Own<Trace> trace, PipelineLogLevel pipelineLogLevel)
-    : pipelineLogLevel(pipelineLogLevel), trace(kj::mv(trace)),
-      parentPipeline(kj::mv(parentPipeline)) {}
-WorkerTracer::WorkerTracer(PipelineLogLevel pipelineLogLevel)
-    : pipelineLogLevel(pipelineLogLevel),
-      trace(kj::refcounted<Trace>(kj::none, kj::none, kj::none, kj::none, kj::none, nullptr, kj::none)) {}
+void PipelineTracer::addTrace(rpc::Trace::Reader reader) {
+  traces.add(kj::refcounted<Trace>(reader));
+}
 
-void WorkerTracer::log(kj::Date timestamp, LogLevel logLevel, kj::String message) {
+WorkerTracer::WorkerTracer(
+    kj::Rc<PipelineTracer> parentPipeline, kj::Own<Trace> trace, PipelineLogLevel pipelineLogLevel)
+    : pipelineLogLevel(pipelineLogLevel),
+      trace(kj::mv(trace)),
+      parentPipeline(kj::mv(parentPipeline)),
+      self(kj::refcounted<WeakRef<WorkerTracer>>(kj::Badge<WorkerTracer>{}, *this)) {}
+WorkerTracer::WorkerTracer(PipelineLogLevel pipelineLogLevel, ExecutionModel executionModel)
+    : pipelineLogLevel(pipelineLogLevel),
+      trace(kj::refcounted<Trace>(
+          kj::none, kj::none, kj::none, kj::none, kj::none, nullptr, kj::none, executionModel)),
+      self(kj::refcounted<WeakRef<WorkerTracer>>(kj::Badge<WorkerTracer>{}, *this)) {}
+
+kj::LiteralStringConst logSizeExceeded =
+    "[\"Log size limit exceeded: More than 128KB of data (across console.log statements, exception, request metadata and headers) was logged during a single request. Subsequent data for this request will not be recorded in logs, appear when tailing this Worker's logs, or in Tail Workers.\"]"_kjc;
+
+void WorkerTracer::addLog(kj::Date timestamp, LogLevel logLevel, kj::String message) {
   if (trace->exceededLogLimit) {
     return;
   }
   if (pipelineLogLevel == PipelineLogLevel::NONE) {
     return;
   }
-  size_t newSize = trace->bytesUsed + sizeof(Trace::Log) + message.size();
+  size_t newSize = trace->bytesUsed + sizeof(tracing::Log) + message.size();
   if (newSize > MAX_TRACE_BYTES) {
     trace->exceededLogLimit = true;
     trace->truncated = true;
     // We use a JSON encoded array/string to match other console.log() recordings:
-    trace->logs.add(
-        timestamp, LogLevel::WARN,
-        kj::str("[\"Log size limit exceeded: More than 128KB of data (across console.log statements, exception, request metadata and headers) was logged during a single request. Subsequent data for this request will not be recorded in logs, appear when tailing this Worker's logs, or in Tail Workers.\"]"));
+    trace->logs.add(timestamp, LogLevel::WARN, kj::str(logSizeExceeded));
     return;
   }
   trace->bytesUsed = newSize;
   trace->logs.add(timestamp, logLevel, kj::mv(message));
 }
 
-void WorkerTracer::addException(kj::Date timestamp, kj::String name, kj::String message,
-                                kj::Maybe<kj::String> stack) {
+void WorkerTracer::addSpan(CompleteSpan&& span) {
+  // This is where we'll actually encode the span.
+  // Drop any spans beyond MAX_USER_SPANS.
+  if (trace->numSpans >= MAX_USER_SPANS) {
+    return;
+  }
+  trace->numSpans++;
+
+  if (trace->exceededLogLimit) {
+    return;
+  }
+  if (pipelineLogLevel == PipelineLogLevel::NONE) {
+    return;
+  }
+
+  // 48B for traceID, spanID, parentSpanID, start & end time.
+  const int fixedSpanOverhead = 48;
+  size_t newSize = trace->bytesUsed + fixedSpanOverhead + span.operationName.size();
+  for (const Span::TagMap::Entry& tag: span.tags) {
+    newSize += tag.key.size();
+    KJ_SWITCH_ONEOF(tag.value) {
+      KJ_CASE_ONEOF(str, kj::String) {
+        newSize += str.size();
+      }
+      KJ_CASE_ONEOF(val, bool) {
+        newSize++;
+      }
+      // int64_t and double
+      KJ_CASE_ONEOF_DEFAULT {
+        newSize += sizeof(int64_t);
+      }
+    }
+  }
+
+  if (newSize > MAX_TRACE_BYTES) {
+    trace->exceededLogLimit = true;
+    trace->truncated = true;
+    trace->logs.add(span.endTime, LogLevel::WARN, kj::str(logSizeExceeded));
+    return;
+  }
+  trace->bytesUsed = newSize;
+  trace->spans.add(kj::mv(span));
+  trace->numSpans++;
+}
+
+Span::TagValue spanTagClone(const Span::TagValue& tag) {
+  KJ_SWITCH_ONEOF(tag) {
+    KJ_CASE_ONEOF(str, kj::String) {
+      return kj::str(str);
+    }
+    KJ_CASE_ONEOF(val, int64_t) {
+      // TODO(o11y): We can't stringify BigInt, which causes test problems. Export this as hex
+      // instead? Then again OTel assumes that int values can be represented as JS numbers, so
+      // representing this as a double/Number might be fine despite the possible precision loss.
+      return kj::str(val);
+    }
+    KJ_CASE_ONEOF(val, double) {
+      return val;
+    }
+    KJ_CASE_ONEOF(val, bool) {
+      return val;
+    }
+  }
+  KJ_UNREACHABLE;
+}
+
+kj::String spanTagStr(const Span::TagValue& tag) {
+  KJ_SWITCH_ONEOF(tag) {
+    KJ_CASE_ONEOF(str, kj::String) {
+      return kj::str(str);
+    }
+    KJ_CASE_ONEOF(val, int64_t) {
+      return kj::str(val);
+    }
+    KJ_CASE_ONEOF(val, double) {
+      return kj::str(val);
+    }
+    KJ_CASE_ONEOF(val, bool) {
+      return kj::str(val);
+    }
+  }
+  KJ_UNREACHABLE;
+}
+
+using RpcValue = rpc::TagValue;
+void serializeTagValue(RpcValue::Builder builder, const Span::TagValue& value) {
+  KJ_SWITCH_ONEOF(value) {
+    KJ_CASE_ONEOF(b, bool) {
+      builder.setBool(b);
+    }
+    KJ_CASE_ONEOF(i, int64_t) {
+      builder.setInt64(i);
+    }
+    KJ_CASE_ONEOF(d, double) {
+      builder.setFloat64(d);
+    }
+    KJ_CASE_ONEOF(s, kj::String) {
+      builder.setString(s);
+    }
+  }
+}
+
+Span::TagValue deserializeTagValue(RpcValue::Reader value) {
+  switch (value.which()) {
+    case RpcValue::BOOL:
+      return value.getBool();
+    case RpcValue::FLOAT64:
+      return value.getFloat64();
+    case RpcValue::INT64:
+      return value.getInt64();
+    case RpcValue::STRING:
+      return kj::heapString(value.getString());
+    default:
+      KJ_UNREACHABLE;
+  }
+}
+
+void CompleteSpan::copyTo(rpc::UserSpanData::Builder builder) {
+  builder.setOperationName(operationName.asPtr());
+  builder.setStartTimeNs((startTime - kj::UNIX_EPOCH) / kj::NANOSECONDS);
+  builder.setEndTimeNs((endTime - kj::UNIX_EPOCH) / kj::NANOSECONDS);
+  builder.setSpanId(spanId);
+  builder.setParentSpanId(parentSpanId);
+
+  auto tagsParam = builder.initTags(tags.size());
+  auto i = 0;
+  for (auto& tag: tags) {
+    auto tagParam = tagsParam[i++];
+    tagParam.setKey(tag.key.asPtr());
+    serializeTagValue(tagParam.initValue(), tag.value);
+  }
+}
+
+CompleteSpan::CompleteSpan(rpc::UserSpanData::Reader reader)
+    : spanId(reader.getSpanId()),
+      parentSpanId(reader.getParentSpanId()),
+      operationName(kj::str(reader.getOperationName())),
+      startTime(kj::UNIX_EPOCH + reader.getStartTimeNs() * kj::NANOSECONDS),
+      endTime(kj::UNIX_EPOCH + reader.getEndTimeNs() * kj::NANOSECONDS) {
+  auto tagsParam = reader.getTags();
+  tags.reserve(tagsParam.size());
+  for (auto tagParam: tagsParam) {
+    tags.insert(kj::ConstString(kj::heapString(tagParam.getKey())),
+        deserializeTagValue(tagParam.getValue()));
+  }
+}
+
+void WorkerTracer::addException(
+    kj::Date timestamp, kj::String name, kj::String message, kj::Maybe<kj::String> stack) {
   if (trace->exceededExceptionLimit) {
     return;
   }
@@ -595,46 +1867,43 @@ void WorkerTracer::addException(kj::Date timestamp, kj::String name, kj::String 
   if (pipelineLogLevel == PipelineLogLevel::NONE) {
     return;
   }
-  size_t newSize = trace->bytesUsed + sizeof(Trace::Exception) + name.size() + message.size();
+  size_t newSize = trace->bytesUsed + sizeof(tracing::Exception) + name.size() + message.size();
   KJ_IF_SOME(s, stack) {
     newSize += s.size();
   }
   if (newSize > MAX_TRACE_BYTES) {
     trace->exceededExceptionLimit = true;
     trace->truncated = true;
-    trace->exceptions.add(
-        timestamp, kj::str("Error"),
-        kj::str("Trace resource limit exceeded; subsequent exceptions not recorded."),
-        kj::none);
+    trace->exceptions.add(timestamp, kj::str("Error"),
+        kj::str("Trace resource limit exceeded; subsequent exceptions not recorded."), kj::none);
     return;
   }
   trace->bytesUsed = newSize;
   trace->exceptions.add(timestamp, kj::mv(name), kj::mv(message), kj::mv(stack));
 }
 
-void WorkerTracer::addDiagnosticChannelEvent(kj::Date timestamp,
-                                             kj::String channel,
-                                             kj::Array<kj::byte> message) {
+void WorkerTracer::addDiagnosticChannelEvent(
+    kj::Date timestamp, kj::String channel, kj::Array<kj::byte> message) {
   if (trace->exceededDiagnosticChannelEventLimit) {
     return;
   }
   if (pipelineLogLevel == PipelineLogLevel::NONE) {
     return;
   }
-  size_t newSize = trace->bytesUsed + sizeof(Trace::DiagnosticChannelEvent) + channel.size() +
-                   message.size();
+  size_t newSize =
+      trace->bytesUsed + sizeof(tracing::DiagnosticChannelEvent) + channel.size() + message.size();
   if (newSize > MAX_TRACE_BYTES) {
     trace->exceededDiagnosticChannelEventLimit = true;
     trace->truncated = true;
-    trace->diagnosticChannelEvents.add(timestamp, kj::str("workerd.LimitExceeded"),
-                                       kj::Array<kj::byte>());
+    trace->diagnosticChannelEvents.add(
+        timestamp, kj::str("workerd.LimitExceeded"), kj::Array<kj::byte>());
     return;
   }
   trace->bytesUsed = newSize;
   trace->diagnosticChannelEvents.add(timestamp, kj::mv(channel), kj::mv(message));
 }
 
-void WorkerTracer::setEventInfo(kj::Date timestamp, Trace::EventInfo&& info) {
+void WorkerTracer::setEventInfo(kj::Date timestamp, tracing::EventInfo&& info) {
   KJ_ASSERT(trace->eventInfo == kj::none, "tracer can only be used for a single event");
 
   // TODO(someday): For now, we're using logLevel == none as a hint to avoid doing anything
@@ -650,7 +1919,7 @@ void WorkerTracer::setEventInfo(kj::Date timestamp, Trace::EventInfo&& info) {
 
   size_t newSize = trace->bytesUsed;
   KJ_SWITCH_ONEOF(info) {
-    KJ_CASE_ONEOF(fetch, Trace::FetchEventInfo) {
+    KJ_CASE_ONEOF(fetch, tracing::FetchEventInfo) {
       newSize += fetch.url.size();
       for (const auto& header: fetch.headers) {
         newSize += header.name.size() + header.value.size();
@@ -658,39 +1927,25 @@ void WorkerTracer::setEventInfo(kj::Date timestamp, Trace::EventInfo&& info) {
       newSize += fetch.cfJson.size();
       if (newSize > MAX_TRACE_BYTES) {
         trace->truncated = true;
-        trace->logs.add(
-            timestamp, LogLevel::WARN,
+        trace->logs.add(timestamp, LogLevel::WARN,
             kj::str("[\"Trace resource limit exceeded; could not capture event info.\"]"));
-        trace->eventInfo = Trace::FetchEventInfo(fetch.method, {}, {}, {});
+        trace->eventInfo = tracing::FetchEventInfo(fetch.method, {}, {}, {});
         return;
       }
     }
-    KJ_CASE_ONEOF(_, Trace::JsRpcEventInfo) {}
-    KJ_CASE_ONEOF(_, Trace::ScheduledEventInfo) {}
-    KJ_CASE_ONEOF(_, Trace::AlarmEventInfo) {}
-    KJ_CASE_ONEOF(_, Trace::QueueEventInfo) {}
-    KJ_CASE_ONEOF(_, Trace::EmailEventInfo) {}
-    KJ_CASE_ONEOF(_, Trace::TraceEventInfo) {}
-    KJ_CASE_ONEOF(_, Trace::HibernatableWebSocketEventInfo) {}
-    KJ_CASE_ONEOF(_, Trace::CustomEventInfo) {}
+    KJ_CASE_ONEOF_DEFAULT {}
   }
   trace->bytesUsed = newSize;
   trace->eventInfo = kj::mv(info);
 }
 
-void WorkerTracer::setOutcome(EventOutcome outcome) {
+void WorkerTracer::setOutcome(EventOutcome outcome, kj::Duration cpuTime, kj::Duration wallTime) {
   trace->outcome = outcome;
-}
-
-void WorkerTracer::setCPUTime(kj::Duration cpuTime) {
   trace->cpuTime = cpuTime;
-}
-
-void WorkerTracer::setWallTime(kj::Duration wallTime) {
   trace->wallTime = wallTime;
 }
 
-void WorkerTracer::setFetchResponseInfo(Trace::FetchResponseInfo&& info) {
+void WorkerTracer::setFetchResponseInfo(tracing::FetchResponseInfo&& info) {
   // Match the behavior of setEventInfo(). Any resolution of the TODO comments
   // in setEventInfo() that are related to this check while probably also affect
   // this function.
@@ -698,9 +1953,8 @@ void WorkerTracer::setFetchResponseInfo(Trace::FetchResponseInfo&& info) {
     return;
   }
 
-  KJ_REQUIRE(KJ_REQUIRE_NONNULL(trace->eventInfo).is<Trace::FetchEventInfo>());
-  KJ_ASSERT(trace->fetchResponseInfo == kj::none,
-            "setFetchResponseInfo can only be called once");
+  KJ_REQUIRE(KJ_REQUIRE_NONNULL(trace->eventInfo).is<tracing::FetchEventInfo>());
+  KJ_ASSERT(trace->fetchResponseInfo == kj::none, "setFetchResponseInfo can only be called once");
   trace->fetchResponseInfo = kj::mv(info);
 }
 
@@ -712,4 +1966,19 @@ void WorkerTracer::setTrace(rpc::Trace::Reader reader) {
   trace->mergeFrom(reader, pipelineLogLevel);
 }
 
-} // namespace workerd
+ScopedDurationTagger::ScopedDurationTagger(
+    SpanBuilder& span, kj::ConstString key, const kj::MonotonicClock& timer)
+    : span(span),
+      key(kj::mv(key)),
+      timer(timer),
+      startTime(timer.now()) {}
+
+ScopedDurationTagger::~ScopedDurationTagger() noexcept(false) {
+  auto duration = timer.now() - startTime;
+  if (isPredictableModeForTest()) {
+    duration = 0 * kj::NANOSECONDS;
+  }
+  span.setTag(kj::mv(key), duration / kj::NANOSECONDS);
+}
+
+}  // namespace workerd

@@ -1,9 +1,14 @@
-import { parseTarInfo } from "pyodide-internal:tar";
-import { createTarFS } from "pyodide-internal:tarfs";
-import { createMetadataFS } from "pyodide-internal:metadatafs";
-import { default as LOCKFILE } from "pyodide-internal:generated/pyodide-lock.json";
-import { REQUIREMENTS, WORKERD_INDEX_URL } from "pyodide-internal:metadata";
-import { simpleRunPython } from "pyodide-internal:util";
+import { parseTarInfo } from 'pyodide-internal:tar';
+import { createTarFS } from 'pyodide-internal:tarfs';
+import { createMetadataFS } from 'pyodide-internal:metadatafs';
+import {
+  REQUIREMENTS,
+  LOAD_WHEELS_FROM_R2,
+  LOCKFILE,
+  LOAD_WHEELS_FROM_ARTIFACT_BUNDLER,
+} from 'pyodide-internal:metadata';
+import { simpleRunPython } from 'pyodide-internal:util';
+import { default as EmbeddedPackagesTarReader } from 'pyodide-internal:packages_tar_reader';
 
 const canonicalizeNameRegex = /[-_.]+/g;
 
@@ -14,13 +19,17 @@ const canonicalizeNameRegex = /[-_.]+/g;
  * @private
  */
 function canonicalizePackageName(name: string): string {
-  return name.replace(canonicalizeNameRegex, "-").toLowerCase();
+  return name.replace(canonicalizeNameRegex, '-').toLowerCase();
 }
 
 // The "name" field in the lockfile is not canonicalized
-const STDLIB_PACKAGES: string[] = Object.values(LOCKFILE.packages)
-  .filter(({ install_dir }) => install_dir === "stdlib")
+export const STDLIB_PACKAGES: string[] = Object.values(LOCKFILE.packages)
+  .filter(({ install_dir }) => install_dir === 'stdlib')
   .map(({ name }) => canonicalizePackageName(name));
+
+// Each item in the list is an element of the file path, for example
+// `folder/file.txt` -> `["folder", "file.txt"]
+export type FilePath = string[];
 
 /**
  * SitePackagesDir keeps track of the virtualized view of the site-packages
@@ -28,18 +37,19 @@ const STDLIB_PACKAGES: string[] = Object.values(LOCKFILE.packages)
  */
 class SitePackagesDir {
   public rootInfo: TarFSInfo;
-  public soFiles: string[][];
+  public soFiles: FilePath[];
   public loadedRequirements: Set<string>;
   constructor() {
     this.rootInfo = {
       children: new Map(),
       mode: 0o777,
-      type: "5",
+      type: '5',
       modtime: 0,
       size: 0,
-      path: "",
-      name: "",
+      path: '',
+      name: '',
       parts: [],
+      reader: null,
     };
     this.soFiles = [];
     this.loadedRequirements = new Set();
@@ -55,7 +65,7 @@ class SitePackagesDir {
     overlayInfo.children!.forEach((val, key) => {
       if (this.rootInfo.children!.has(key)) {
         throw new Error(
-          `File/folder ${key} being written by multiple packages`,
+          `File/folder ${key} being written by multiple packages`
         );
       }
       this.rootInfo.children!.set(key, val);
@@ -72,10 +82,10 @@ class SitePackagesDir {
   addSmallBundle(
     tarInfo: TarFSInfo,
     soFiles: string[],
-    requirement: string,
+    requirement: string
   ): void {
     for (const soFile of soFiles) {
-      this.soFiles.push(soFile.split("/"));
+      this.soFiles.push(soFile.split('/'));
     }
     this.mountOverlay(tarInfo);
     this.loadedRequirements.add(requirement);
@@ -91,12 +101,12 @@ class SitePackagesDir {
   addBigBundle(
     tarInfo: TarFSInfo,
     soFiles: string[],
-    requirements: Set<string>,
+    requirements: Set<string>
   ): void {
     // add all the .so files we will need to preload from the big bundle
     for (const soFile of soFiles) {
       // If folder is in list of requirements include .so file in list to preload.
-      const [pkg, ...rest] = soFile.split("/");
+      const [pkg, ...rest] = soFile.split('/');
       if (requirements.has(pkg)) {
         this.soFiles.push(rest);
       }
@@ -121,23 +131,34 @@ class SitePackagesDir {
  *
  * This also returns the list of soFiles in the resulting site-packages
  * directory so we can preload them.
+ *
+ * TODO(later): This needs to be removed when external package loading is enabled.
  */
-export function buildSitePackages(
-  requirements: Set<string>,
-): [SitePackagesDir, boolean] {
-  const [bigTarInfo, bigTarSoFiles] = parseTarInfo();
+export function buildSitePackages(requirements: Set<string>): SitePackagesDir {
+  if (EmbeddedPackagesTarReader.read === undefined) {
+    // Package retrieval is enabled, so the embedded tar reader isn't initialised.
+    // All packages, including STDLIB_PACKAGES, are loaded in `loadPackages`.
+    return new SitePackagesDir();
+  }
 
-  let LOAD_WHEELS_FROM_R2 = true;
+  const [bigTarInfo, bigTarSoFiles] = parseTarInfo(EmbeddedPackagesTarReader);
+
   let requirementsInBigBundle = new Set([...STDLIB_PACKAGES]);
-  if (bigTarInfo.children!.size > 10) {
-    LOAD_WHEELS_FROM_R2 = false;
+
+  // Currently, we include all packages within the big bundle in Edgeworker.
+  // During this transitionary period, we add the option (via autogate)
+  // to load packages from GCS (in which case they are accessible through the ArtifactBundler)
+  // or to simply use the packages within the big bundle. The latter is not ideal
+  // since we're locked to a specific packages version, so we will want to move away
+  // from it eventually.
+  if (!LOAD_WHEELS_FROM_R2 && !LOAD_WHEELS_FROM_ARTIFACT_BUNDLER) {
     requirements.forEach((r) => requirementsInBigBundle.add(r));
   }
 
   const res = new SitePackagesDir();
   res.addBigBundle(bigTarInfo, bigTarSoFiles, requirementsInBigBundle);
 
-  return [res, LOAD_WHEELS_FROM_R2];
+  return res;
 }
 
 /**
@@ -154,7 +175,7 @@ export function patchLoadPackage(pyodide: Pyodide): void {
 
 function disabledLoadPackage(): never {
   throw new Error(
-    "pyodide.loadPackage is disabled because packages are encoded in the binary",
+    'pyodide.loadPackage is disabled because packages are encoded in the binary'
   );
 }
 
@@ -164,6 +185,7 @@ function disabledLoadPackage(): never {
 function getTransitiveRequirements(): Set<string> {
   const requirements = REQUIREMENTS.map(canonicalizePackageName);
   // resolve transitive dependencies of requirements and if IN_WORKERD install them from the cdn.
+  // TODO(later): use current package's LOCKFILE instead of the global.
   const packageDatas = recursiveDependencies(LOCKFILE, requirements);
   return new Set(packageDatas.map(({ name }) => canonicalizePackageName(name)));
 }
@@ -182,19 +204,26 @@ export function getSitePackagesPath(Module: Module): string {
  * details, so even though we want these directories to be on sys.path, we
  * handle that separately in adjustSysPath.
  */
-export function mountLib(Module: Module, info: TarFSInfo): void {
+export function mountSitePackages(Module: Module, info: TarFSInfo): void {
   const tarFS = createTarFS(Module);
-  const mdFS = createMetadataFS(Module);
   const site_packages = getSitePackagesPath(Module);
   Module.FS.mkdirTree(site_packages);
-  Module.FS.mkdirTree("/session/metadata");
-  if (!LOAD_WHEELS_FROM_R2) {
-    // if we are not loading additional wheels from R2, then we're done
+  if (!LOAD_WHEELS_FROM_R2 && !LOAD_WHEELS_FROM_ARTIFACT_BUNDLER) {
+    // if we are not loading additional wheels, then we're done
     // with site-packages and we can mount it here. Otherwise, we must mount it in
     // loadPackages().
     Module.FS.mount(tarFS, { info }, site_packages);
   }
-  Module.FS.mount(mdFS, {}, "/session/metadata");
+}
+
+export function mountWorkerFiles(Module: Module) {
+  Module.FS.mkdirTree('/session/metadata');
+  const mdFS = createMetadataFS(Module);
+  Module.FS.mount(mdFS, {}, '/session/metadata');
+  simpleRunPython(
+    Module,
+    `from importlib import invalidate_caches; invalidate_caches(); del invalidate_caches`
+  );
 }
 
 /**
@@ -205,13 +234,13 @@ export function adjustSysPath(Module: Module): void {
   const site_packages = getSitePackagesPath(Module);
   simpleRunPython(
     Module,
-    `import sys; sys.path.append("/session/metadata"); sys.path.append("${site_packages}"); del sys`,
+    `import sys; sys.path.append("/session/metadata"); sys.path.append("${site_packages}"); del sys`
   );
 }
 
 function recursiveDependencies(
   lockfile: PackageLock,
-  names: string[],
+  names: string[]
 ): PackageDeclaration[] {
   const toLoad = new Map();
   for (const name of names) {
@@ -230,7 +259,7 @@ function recursiveDependencies(
 function addPackageToLoad(
   lockfile: PackageLock,
   name: string,
-  toLoad: Map<string, PackageDeclaration>,
+  toLoad: Map<string, PackageDeclaration>
 ): void {
   const normalizedName = canonicalizePackageName(name);
   if (toLoad.has(normalizedName)) {
@@ -240,7 +269,7 @@ function addPackageToLoad(
   if (!pkgInfo) {
     throw new Error(
       `It appears that a package ("${name}") you requested is not available yet in workerd. \n` +
-        "If you would like this package to be included, please open an issue at https://github.com/cloudflare/workerd/discussions/new?category=python-packages.",
+        'If you would like this package to be included, please open an issue at https://github.com/cloudflare/workerd/discussions/new?category=python-packages.'
     );
   }
 
@@ -253,6 +282,4 @@ function addPackageToLoad(
 
 export { REQUIREMENTS };
 export const TRANSITIVE_REQUIREMENTS = getTransitiveRequirements();
-export const [SITE_PACKAGES, LOAD_WHEELS_FROM_R2] = buildSitePackages(
-  TRANSITIVE_REQUIREMENTS,
-);
+export const SITE_PACKAGES = buildSitePackages(TRANSITIVE_REQUIREMENTS);

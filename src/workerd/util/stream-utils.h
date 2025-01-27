@@ -12,19 +12,17 @@ kj::Own<kj::AsyncInputStream> newMemoryInputStream(kj::ArrayPtr<const kj::byte>)
 kj::Own<kj::AsyncInputStream> newMemoryInputStream(kj::StringPtr);
 
 // An InputStream that can be disconnected.
-class NeuterableInputStream: public kj::AsyncInputStream,
-                             public kj::Refcounted {
-public:
+class NeuterableInputStream: public kj::AsyncInputStream, public kj::Refcounted {
+ public:
   virtual void neuter(kj::Exception ex) = 0;
 };
 
 class NeuterableIoStream: public kj::AsyncIoStream {
-public:
+ public:
   virtual void neuter(kj::Exception ex) = 0;
 };
 
 kj::Own<NeuterableInputStream> newNeuterableInputStream(kj::AsyncInputStream&);
 kj::Own<NeuterableIoStream> newNeuterableIoStream(kj::AsyncIoStream&);
-
 
 }  // namespace workerd

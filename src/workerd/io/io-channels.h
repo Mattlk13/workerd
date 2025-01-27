@@ -5,12 +5,16 @@
 #pragma once
 
 #include <workerd/io/actor-id.h>
-#include <kj/string.h>
-#include <kj/debug.h>
+#include <workerd/io/io-util.h>
 #include <workerd/io/trace.h>
-#include <workerd/api/util.h>
 
-namespace kj { class HttpClient; }
+#include <capnp/capability.h>  // for Capability
+#include <kj/debug.h>
+#include <kj/string.h>
+
+namespace kj {
+class HttpClient;
+}
 
 namespace workerd {
 
@@ -19,7 +23,7 @@ class WorkerInterface;
 // Interface for talking to the Cache API. Needs to be declared here so that IoContext can
 // contain it.
 class CacheClient {
-public:
+ public:
   // Get the default namespace, i.e. the one that fetch() will use for caching.
   //
   // The returned client is intended to be used for one request. `cfBlobJson` and `parentSpan` have
@@ -32,14 +36,13 @@ public:
   // The returned client is intended to be used for one request. `parentSpan` has the same meaning
   // as in `IoContext::SubrequestMetadata`.
   virtual kj::Own<kj::HttpClient> getNamespace(
-      kj::StringPtr name, kj::Maybe<kj::String> cfBlobJson,
-      SpanParent parentSpan) = 0;
+      kj::StringPtr name, kj::Maybe<kj::String> cfBlobJson, SpanParent parentSpan) = 0;
 };
 
 // A timer instance, used to back Date.now(), setTimeout(), etc. This object may implement
 // Spectre mitigations.
 class TimerChannel {
-public:
+ public:
   // Call each time control enters the isolate to set up the clock.
   virtual void syncTime() = 0;
 
@@ -79,7 +82,7 @@ public:
 // all methods throw exceptions, then the Worker will be completely unable to communicate with
 // anything in the world except for the client -- this is a useful property for sandboxing!
 class IoChannelFactory {
-public:
+ public:
   // Contains metadata attached to an outgoing subrequest from a worker, independent of the type
   // of request.
   struct SubrequestMetadata {
@@ -87,7 +90,7 @@ public:
     kj::Maybe<kj::String> cfBlobJson;
 
     // Specifies the parent span for the subrequest for tracing purposes.
-    SpanParent parentSpan = nullptr;
+    TraceParentContext tracing = TraceParentContext(nullptr, nullptr);
 
     // Serialized JSON value to pass in ew_compat field of control header to FL. If this subrequest
     // does not go directly to FL, this value is ignored. Flags marked with `$neededByFl` in
@@ -99,7 +102,7 @@ public:
     kj::Maybe<kj::StringPtr> featureFlagsForFl;
 
     // Timestamp for when a subrequest is started. (ms since the Unix Epoch)
-    double startTime = api::dateNow();
+    double startTime = dateNow();
   };
 
   virtual kj::Own<WorkerInterface> startSubrequest(uint channel, SubrequestMetadata metadata) = 0;
@@ -131,7 +134,7 @@ public:
   // sent, and they will be delivered in the order they are sent (e-order). This is an I/O type
   // so it is only valid within the `IoContext` where it was created.
   class ActorChannel {
-  public:
+   public:
     // Start a new request to this actor.
     //
     // Note that not all `metadata` properties make sense here, but it didn't seem worth defining
@@ -146,12 +149,16 @@ public:
   // one of the worker's bindings, however it doesn't necessarily have to be from the the correct
   // `ActorIdFactory` -- if it's from some other factory, the method will throw an appropriate
   // exception.
-  virtual kj::Own<ActorChannel> getGlobalActor(uint channel, const ActorIdFactory::ActorId& id,
-      kj::Maybe<kj::String> locationHint, ActorGetMode mode, SpanParent parentSpan) = 0;
+  virtual kj::Own<ActorChannel> getGlobalActor(uint channel,
+      const ActorIdFactory::ActorId& id,
+      kj::Maybe<kj::String> locationHint,
+      ActorGetMode mode,
+      bool enableReplicaRouting,
+      SpanParent parentSpan) = 0;
 
   // Get an actor stub from the given namespace for the actor with the given name.
-  virtual kj::Own<ActorChannel> getColoLocalActor(uint channel, kj::StringPtr id,
-      SpanParent parentSpan) = 0;
+  virtual kj::Own<ActorChannel> getColoLocalActor(
+      uint channel, kj::StringPtr id, SpanParent parentSpan) = 0;
 
   // Aborts all actors except those in namespaces marked with `preventEviction`.
   virtual void abortAllActors() {
@@ -159,4 +166,4 @@ public:
   }
 };
 
-} // namespace workerd
+}  // namespace workerd

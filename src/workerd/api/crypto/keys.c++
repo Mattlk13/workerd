@@ -1,63 +1,70 @@
 #include "keys.h"
-#include <openssl/ec_key.h>
+
 #include <openssl/crypto.h>
+#include <openssl/ec_key.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 
 namespace workerd::api {
 
 namespace {
-static char EMPTY_PASSPHRASE[] = "";
+static const char EMPTY_PASSPHRASE[] = "";
 }  // namespace
 
 kj::StringPtr toStringPtr(KeyType type) {
   switch (type) {
-    case KeyType::SECRET: return "secret"_kj;
-    case KeyType::PUBLIC: return "public"_kj;
-    case KeyType::PRIVATE: return "private"_kj;
+    case KeyType::SECRET:
+      return "secret"_kj;
+    case KeyType::PUBLIC:
+      return "public"_kj;
+    case KeyType::PRIVATE:
+      return "private"_kj;
   }
   KJ_UNREACHABLE;
 }
 
-AsymmetricKeyCryptoKeyImpl::AsymmetricKeyCryptoKeyImpl(AsymmetricKeyData&& key,
-                                                       bool extractable)
+AsymmetricKeyCryptoKeyImpl::AsymmetricKeyCryptoKeyImpl(AsymmetricKeyData&& key, bool extractable)
     : CryptoKey::Impl(extractable, key.usages),
       keyData(kj::mv(key.evpPkey)),
       keyType(key.keyType) {
   KJ_DASSERT(keyType != KeyType::SECRET);
 }
 
-kj::Array<kj::byte> AsymmetricKeyCryptoKeyImpl::signatureSslToWebCrypto(kj::Array<kj::byte> signature) const {
-  return kj::mv(signature);
+jsg::BufferSource AsymmetricKeyCryptoKeyImpl::signatureSslToWebCrypto(
+    jsg::Lock& js, kj::Array<kj::byte> signature) const {
+  auto backing = jsg::BackingStore::alloc<v8::ArrayBuffer>(js, signature.size());
+  backing.asArrayPtr().copyFrom(signature);
+  return jsg::BufferSource(js, kj::mv(backing));
 }
 
-kj::Array<const kj::byte> AsymmetricKeyCryptoKeyImpl::signatureWebCryptoToSsl(
-    kj::ArrayPtr<const kj::byte> signature) const {
-  return { signature.begin(), signature.size(), kj::NullArrayDisposer::instance };
+jsg::BufferSource AsymmetricKeyCryptoKeyImpl::signatureWebCryptoToSsl(
+    jsg::Lock& js, kj::ArrayPtr<const kj::byte> signature) const {
+  auto backing = jsg::BackingStore::alloc<v8::ArrayBuffer>(js, signature.size());
+  backing.asArrayPtr().copyFrom(signature);
+  return jsg::BufferSource(js, kj::mv(backing));
 }
 
-SubtleCrypto::ExportKeyData AsymmetricKeyCryptoKeyImpl::exportKey(kj::StringPtr format) const {
+SubtleCrypto::ExportKeyData AsymmetricKeyCryptoKeyImpl::exportKey(
+    jsg::Lock& js, kj::StringPtr format) const {
   // EVP_marshal_{public,private}_key() functions are BoringSSL
   // extensions which export asymmetric keys in DER format.
   // DER is the binary format which *should* work to export any EVP_PKEY.
 
-  uint8_t *der = nullptr;
+  uint8_t* der = nullptr;
   KJ_DEFER(if (der != nullptr) { OPENSSL_free(der); });
   size_t derLen;
   bssl::ScopedCBB cbb;
   if (format == "pkcs8"_kj) {
     JSG_REQUIRE(keyType == KeyType::PRIVATE, DOMInvalidAccessError,
         "Asymmetric pkcs8 export requires private key (not \"", toStringPtr(keyType), "\").");
-    if (!CBB_init(cbb.get(), 0) ||
-        !EVP_marshal_private_key(cbb.get(), keyData.get()) ||
+    if (!CBB_init(cbb.get(), 0) || !EVP_marshal_private_key(cbb.get(), keyData.get()) ||
         !CBB_finish(cbb.get(), &der, &derLen)) {
       JSG_FAIL_REQUIRE(DOMOperationError, "Private key export failed.");
     }
   } else if (format == "spki"_kj) {
-      JSG_REQUIRE(keyType == KeyType::PUBLIC, DOMInvalidAccessError,
+    JSG_REQUIRE(keyType == KeyType::PUBLIC, DOMInvalidAccessError,
         "Asymmetric spki export requires public key (not \"", toStringPtr(keyType), "\").");
-    if (!CBB_init(cbb.get(), 0) ||
-        !EVP_marshal_public_key(cbb.get(), keyData.get()) ||
+    if (!CBB_init(cbb.get(), 0) || !EVP_marshal_public_key(cbb.get(), keyData.get()) ||
         !CBB_finish(cbb.get(), &der, &derLen)) {
       JSG_FAIL_REQUIRE(DOMOperationError, "Public key export failed.");
     }
@@ -69,16 +76,19 @@ SubtleCrypto::ExportKeyData AsymmetricKeyCryptoKeyImpl::exportKey(kj::StringPtr 
     jwk.key_ops = getUsages().map([](auto usage) { return kj::str(usage.name()); });
     return jwk;
   } else if (format == "raw"_kj) {
-    return exportRaw();
+    return exportRaw(js);
   } else {
     JSG_FAIL_REQUIRE(DOMInvalidAccessError, "Cannot export \"", getAlgorithmName(), "\" in \"",
         format, "\" format.");
   }
 
-  return kj::heapArray(der, derLen);
+  auto backing = jsg::BackingStore::alloc<v8::ArrayBuffer>(js, derLen);
+  auto src = kj::arrayPtr(der, derLen);
+  backing.asArrayPtr().copyFrom(src);
+  return jsg::BufferSource(js, kj::mv(backing));
 }
 
-kj::Array<kj::byte> AsymmetricKeyCryptoKeyImpl::exportKeyExt(
+jsg::BufferSource AsymmetricKeyCryptoKeyImpl::exportKeyExt(jsg::Lock& js,
     kj::StringPtr format,
     kj::StringPtr type,
     jsg::Optional<kj::String> cipher,
@@ -90,7 +100,8 @@ kj::Array<kj::byte> AsymmetricKeyCryptoKeyImpl::exportKeyExt(
   auto bio = OSSL_BIO_MEM();
 
   struct EncDetail {
-    char* pass = &EMPTY_PASSPHRASE[0];
+    // const_cast is acceptable, pass will be reassigned before it is written to.
+    char* pass = const_cast<char*>(&EMPTY_PASSPHRASE[0]);
     size_t pass_len = 0;
     const EVP_CIPHER* cipher = nullptr;
   };
@@ -112,9 +123,10 @@ kj::Array<kj::byte> AsymmetricKeyCryptoKeyImpl::exportKeyExt(
   const auto fromBio = [&](kj::StringPtr format) {
     BUF_MEM* bptr;
     BIO_get_mem_ptr(bio.get(), &bptr);
-    auto result = kj::heapArray<kj::byte>(bptr->length);
-    memcpy(result.begin(), bptr->data, bptr->length);
-    return kj::mv(result);
+    auto result = jsg::BackingStore::alloc<v8::ArrayBuffer>(js, bptr->length);
+    auto src = kj::arrayPtr(bptr->data, bptr->length);
+    result.asArrayPtr().copyFrom(src.asBytes());
+    return jsg::BufferSource(js, kj::mv(result));
   };
 
   if (getType() == "public"_kj) {
@@ -153,19 +165,14 @@ kj::Array<kj::byte> AsymmetricKeyCryptoKeyImpl::exportKeyExt(
 
   if (type == "pkcs1"_kj) {
     // PKCS#1 is only for RSA keys.
-    JSG_REQUIRE(EVP_PKEY_id(pkey) == EVP_PKEY_RSA, TypeError,
-        "The pkcs1 type is only valid for RSA keys.");
+    JSG_REQUIRE(
+        EVP_PKEY_id(pkey) == EVP_PKEY_RSA, TypeError, "The pkcs1 type is only valid for RSA keys.");
     auto rsa = EVP_PKEY_get1_RSA(pkey);
     KJ_DEFER(RSA_free(rsa));
     if (format == "pem"_kj) {
       auto enc = getEncDetail();
-      if (PEM_write_bio_RSAPrivateKey(
-              bio.get(),
-              rsa,
-              enc.cipher,
-              reinterpret_cast<unsigned char*>(enc.pass),
-              enc.pass_len,
-              nullptr, nullptr) == 1) {
+      if (PEM_write_bio_RSAPrivateKey(bio.get(), rsa, enc.cipher,
+              reinterpret_cast<unsigned char*>(enc.pass), enc.pass_len, nullptr, nullptr) == 1) {
         return fromBio(format);
       }
     } else if (format == "der"_kj) {
@@ -178,37 +185,25 @@ kj::Array<kj::byte> AsymmetricKeyCryptoKeyImpl::exportKeyExt(
     auto enc = getEncDetail();
     if (format == "pem"_kj) {
       if (PEM_write_bio_PKCS8PrivateKey(
-              bio.get(), pkey,
-              enc.cipher,
-              enc.pass,
-              enc.pass_len,
-              nullptr, nullptr) == 1) {
+              bio.get(), pkey, enc.cipher, enc.pass, enc.pass_len, nullptr, nullptr) == 1) {
         return fromBio(format);
       }
     } else if (format == "der"_kj) {
       if (i2d_PKCS8PrivateKey_bio(
-              bio.get(), pkey,
-              enc.cipher,
-              enc.pass,
-              enc.pass_len,
-              nullptr, nullptr) == 1) {
+              bio.get(), pkey, enc.cipher, enc.pass, enc.pass_len, nullptr, nullptr) == 1) {
         return fromBio(format);
       }
     }
   } else if (type == "sec1"_kj) {
     // SEC1 is only used for EC keys.
-    JSG_REQUIRE(EVP_PKEY_id(pkey) == EVP_PKEY_EC, TypeError,
-        "The sec1 type is only valid for EC keys.");
+    JSG_REQUIRE(
+        EVP_PKEY_id(pkey) == EVP_PKEY_EC, TypeError, "The sec1 type is only valid for EC keys.");
     auto ec = EVP_PKEY_get1_EC_KEY(pkey);
     KJ_DEFER(EC_KEY_free(ec));
     if (format == "pem"_kj) {
       auto enc = getEncDetail();
-      if (PEM_write_bio_ECPrivateKey(
-                bio.get(), ec,
-                enc.cipher,
-                reinterpret_cast<unsigned char*>(enc.pass),
-                enc.pass_len,
-                nullptr, nullptr) == 1) {
+      if (PEM_write_bio_ECPrivateKey(bio.get(), ec, enc.cipher,
+              reinterpret_cast<unsigned char*>(enc.pass), enc.pass_len, nullptr, nullptr) == 1) {
         return fromBio(format);
       }
     } else if (format == "der"_kj) {
@@ -222,7 +217,7 @@ kj::Array<kj::byte> AsymmetricKeyCryptoKeyImpl::exportKeyExt(
   JSG_FAIL_REQUIRE(TypeError, "Failed to encode private key");
 }
 
-kj::Array<kj::byte> AsymmetricKeyCryptoKeyImpl::sign(
+jsg::BufferSource AsymmetricKeyCryptoKeyImpl::sign(jsg::Lock& js,
     SubtleCrypto::SignAlgorithm&& algorithm,
     kj::ArrayPtr<const kj::byte> data) const {
   JSG_REQUIRE(keyType == KeyType::PRIVATE, DOMInvalidAccessError,
@@ -236,17 +231,17 @@ kj::Array<kj::byte> AsymmetricKeyCryptoKeyImpl::sign(
     // least 32 bytes larger than the hash digest.
     // Similar checks could also be adopted for more detailed error handling in verify(), but the
     // current approach should be sufficient to avoid internal errors.
-    RSA& rsa = JSG_REQUIRE_NONNULL(EVP_PKEY_get0_RSA(getEvpPkey()), DOMDataError,
-        "Missing RSA key", tryDescribeOpensslErrors());
+    RSA& rsa = JSG_REQUIRE_NONNULL(EVP_PKEY_get0_RSA(getEvpPkey()), DOMDataError, "Missing RSA key",
+        tryDescribeOpensslErrors());
 
     JSG_REQUIRE(EVP_MD_size(type) + 32 <= RSA_size(&rsa), DOMOperationError,
-        "key too small for signing with given digest, need at least ",
-        8 * (EVP_MD_size(type) + 32), "bits.");
+        "key too small for signing with given digest, need at least ", 8 * (EVP_MD_size(type) + 32),
+        "bits.");
   } else if (getAlgorithmName() == "RSA-PSS") {
     // Similarly, RSA-PSS requires keys to be at least the size of the digest and salt plus 2
     // bytes, see https://developer.mozilla.org/en-US/docs/Web/API/RsaPssParams for details.
-    RSA& rsa = JSG_REQUIRE_NONNULL(EVP_PKEY_get0_RSA(getEvpPkey()), DOMDataError,
-        "Missing RSA key", tryDescribeOpensslErrors());
+    RSA& rsa = JSG_REQUIRE_NONNULL(EVP_PKEY_get0_RSA(getEvpPkey()), DOMDataError, "Missing RSA key",
+        tryDescribeOpensslErrors());
     auto salt = JSG_REQUIRE_NONNULL(algorithm.saltLength, DOMDataError,
         "Failed to provide salt for RSA-PSS key operation which requires a salt");
     JSG_REQUIRE(salt >= 0, DOMDataError, "SaltLength for RSA-PSS must be non-negative ",
@@ -271,21 +266,22 @@ kj::Array<kj::byte> AsymmetricKeyCryptoKeyImpl::sign(
 
   KJ_ASSERT(signatureSize <= signature.size());
   if (signatureSize < signature.size()) {
-    signature = kj::heapArray<kj::byte>(signature.slice(0, signatureSize));
+    signature = kj::heapArray<kj::byte>(signature.first(signatureSize));
   }
 
-  return signatureSslToWebCrypto(kj::mv(signature));
+  return signatureSslToWebCrypto(js, kj::mv(signature));
 }
 
-bool AsymmetricKeyCryptoKeyImpl::verify(
+bool AsymmetricKeyCryptoKeyImpl::verify(jsg::Lock& js,
     SubtleCrypto::SignAlgorithm&& algorithm,
-    kj::ArrayPtr<const kj::byte> signature, kj::ArrayPtr<const kj::byte> data) const {
+    kj::ArrayPtr<const kj::byte> signature,
+    kj::ArrayPtr<const kj::byte> data) const {
   ClearErrorOnReturn clearErrorOnReturn;
 
   JSG_REQUIRE(keyType == KeyType::PUBLIC, DOMInvalidAccessError,
       "Asymmetric verification requires a public key.");
 
-  auto sslSignature = signatureWebCryptoToSsl(signature);
+  auto sslSignature = signatureWebCryptoToSsl(js, signature);
 
   auto type = lookupDigestAlgorithm(chooseHash(algorithm.hash)).second;
 
@@ -297,7 +293,8 @@ bool AsymmetricKeyCryptoKeyImpl::verify(
   OSSLCALL(EVP_DigestVerifyUpdate(digestCtx.get(), data.begin(), data.size()));
   // EVP_DigestVerifyFinal() returns 1 on success, 0 on invalid signature, and any other value
   // indicates "a more serious error".
-  auto result = EVP_DigestVerifyFinal(digestCtx.get(), sslSignature.begin(), sslSignature.size());
+  auto result = EVP_DigestVerifyFinal(
+      digestCtx.get(), sslSignature.asArrayPtr().begin(), sslSignature.size());
   JSG_REQUIRE(result == 0 || result == 1, InternalDOMOperationError,
       "Unexpected return code from digest verify", getAlgorithmName());
   return !!result;
@@ -323,15 +320,14 @@ bool AsymmetricKeyCryptoKeyImpl::verifyX509Public(const X509* cert) const {
   return X509_verify(const_cast<X509*>(cert), getEvpPkey()) > 0;
 }
 
-bool AsymmetricKeyCryptoKeyImpl::verifyX509Private(const X509* cert) const{
+bool AsymmetricKeyCryptoKeyImpl::verifyX509Private(const X509* cert) const {
   ClearErrorOnReturn clearErrorOnReturn;
   return X509_check_private_key(const_cast<X509*>(cert), getEvpPkey()) == 1;
 }
 
 // ======================================================================================
 
-AsymmetricKeyData importAsymmetricForWebCrypto(
-    jsg::Lock& js,
+AsymmetricKeyData importAsymmetricForWebCrypto(jsg::Lock& js,
     kj::StringPtr format,
     SubtleCrypto::ImportKeyData keyData,
     kj::StringPtr normalizedName,
@@ -344,8 +340,8 @@ AsymmetricKeyData importAsymmetricForWebCrypto(
     // I found jww's SO answer immeasurably helpful while writing this:
     // https://stackoverflow.com/questions/24093272/how-to-load-a-private-key-from-a-jwk-into-openssl
 
-    auto& keyDataJwk = JSG_REQUIRE_NONNULL(keyData.tryGet<SubtleCrypto::JsonWebKey>(),
-        DOMDataError, "JSON Web Key import requires a JSON Web Key object.");
+    auto& keyDataJwk = JSG_REQUIRE_NONNULL(keyData.tryGet<SubtleCrypto::JsonWebKey>(), DOMDataError,
+        "JSON Web Key import requires a JSON Web Key object.");
 
     KeyType keyType = KeyType::PRIVATE;
     if (keyDataJwk.d != kj::none) {
@@ -366,16 +362,18 @@ AsymmetricKeyData importAsymmetricForWebCrypto(
       // restrict key usages to public key usages. In the case of ECDH, usages must be empty, but
       // if the strict crypto compat flag is not enabled allow the same usages as with private ECDH
       // keys, i.e. derivationKeyMask().
-      usages =
-          CryptoKeyUsageSet::validate(normalizedName, CryptoKeyUsageSet::Context::importPublic,
-                                      keyUsages, allowedUsages & (normalizedName == "ECDH" ?
-                                      strictCrypto ? CryptoKeyUsageSet():
-                                      CryptoKeyUsageSet::derivationKeyMask() :
-                                      CryptoKeyUsageSet::publicKeyMask()));
+      usages = CryptoKeyUsageSet::validate(normalizedName, CryptoKeyUsageSet::Context::importPublic,
+          keyUsages,
+          allowedUsages &
+              (normalizedName == "ECDH"
+                      ? strictCrypto ? CryptoKeyUsageSet() : CryptoKeyUsageSet::derivationKeyMask()
+                      : CryptoKeyUsageSet::publicKeyMask()));
     }
 
     auto [expectedUse, op0, op1] = [&, normalizedName] {
-      if (normalizedName == "RSA-OAEP") {return std::make_tuple("enc", "encrypt", "wrapKey");}
+      if (normalizedName == "RSA-OAEP") {
+        return std::make_tuple("enc", "encrypt", "wrapKey");
+      }
       if (normalizedName == "ECDH" || normalizedName == "X25519") {
         return std::make_tuple("enc", "unused", "unused");
       }
@@ -386,7 +384,8 @@ AsymmetricKeyData importAsymmetricForWebCrypto(
       KJ_IF_SOME(use, keyDataJwk.use) {
         JSG_REQUIRE(use == expectedUse, DOMDataError,
             "Asymmetric \"jwk\" key import with usages requires a JSON Web Key with "
-            "Public Key Use parameter \"use\" (\"", use, "\") equal to \"sig\".");
+            "Public Key Use parameter \"use\" (\"",
+            use, "\") equal to \"sig\".");
       }
     }
 
@@ -405,14 +404,18 @@ AsymmetricKeyData importAsymmetricForWebCrypto(
         // "The "use" and "key_ops" JWK members SHOULD NOT be used together; however, if both are
         // used, the information they convey MUST be consistent." -- RFC 7517, section 4.3.
 
-        JSG_REQUIRE(use == expectedUse, DOMDataError, "Asymmetric \"jwk\" import requires a JSON "
-            "Web Key with Public Key Use \"use\" (\"", use, "\") equal to \"", expectedUse, "\".");
+        JSG_REQUIRE(use == expectedUse, DOMDataError,
+            "Asymmetric \"jwk\" import requires a JSON "
+            "Web Key with Public Key Use \"use\" (\"",
+            use, "\") equal to \"", expectedUse, "\".");
 
         for (const auto& op: ops) {
           JSG_REQUIRE(normalizedName != "ECDH" && normalizedName != "X25519", DOMDataError,
               "A JSON Web Key should have either a Public Key Use parameter (\"use\") or a Key "
               "Operations parameter (\"key_ops\"); otherwise, the parameters must be consistent "
-              "with each other. For public ", normalizedName, " keys, there are no valid usages,"
+              "with each other. For public ",
+              normalizedName,
+              " keys, there are no valid usages,"
               "so keys with a non-empty \"key_ops\" parameter are not allowed.");
 
           // TODO(conform): Can a JWK private key actually be used to verify? Not
@@ -420,9 +423,11 @@ AsymmetricKeyData importAsymmetricForWebCrypto(
           JSG_REQUIRE(op == op0 || op == op1, DOMDataError,
               "A JSON Web Key should have either a Public Key Use parameter (\"use\") or a Key "
               "Operations parameter (\"key_ops\"); otherwise, the parameters must be consistent "
-              "with each other. A Public Key Use for ", normalizedName, " would allow a Key "
-              "Operations array with only \"", op0, "\" and/or \"", op1, "\" values (not \"", op,
-              "\").");
+              "with each other. A Public Key Use for ",
+              normalizedName,
+              " would allow a Key "
+              "Operations array with only \"",
+              op0, "\" and/or \"", op1, "\" values (not \"", op, "\").");
         }
       }
 
@@ -432,14 +437,15 @@ AsymmetricKeyData importAsymmetricForWebCrypto(
       // and the next usages. Test the first usage and the first usage distinct from the first, if
       // present (i.e. the second allowed usage, even if there are duplicates).
       if (keyUsages.size() > 0) {
-        JSG_REQUIRE(std::find(ops.begin(), ops.end(), keyUsages.front()) != ops.end(),
-            DOMDataError, "All specified key usages must be present in the JSON "
+        JSG_REQUIRE(std::find(ops.begin(), ops.end(), keyUsages.front()) != ops.end(), DOMDataError,
+            "All specified key usages must be present in the JSON "
             "Web Key's Key Operations parameter (\"key_ops\").");
         auto secondUsage = std::find_end(keyUsages.begin(), keyUsages.end(), keyUsages.begin(),
-            keyUsages.begin() + 1) + 1;
+                               keyUsages.begin() + 1) +
+            1;
         if (secondUsage != keyUsages.end()) {
-          JSG_REQUIRE(std::find(ops.begin(), ops.end(), *secondUsage) != ops.end(),
-              DOMDataError, "All specified key usages must be present in the JSON "
+          JSG_REQUIRE(std::find(ops.begin(), ops.end(), *secondUsage) != ops.end(), DOMDataError,
+              "All specified key usages must be present in the JSON "
               "Web Key's Key Operations parameter (\"key_ops\").");
         }
       }
@@ -451,41 +457,40 @@ AsymmetricKeyData importAsymmetricForWebCrypto(
           "Cannot create an extractable CryptoKey from an unextractable JSON Web Key.");
     }
 
-    return { readJwk(kj::mv(keyDataJwk)), keyType, usages };
+    return {readJwk(kj::mv(keyDataJwk)), keyType, usages};
   } else if (format == "spki") {
-    kj::ArrayPtr<const kj::byte> keyBytes = JSG_REQUIRE_NONNULL(
-        keyData.tryGet<kj::Array<kj::byte>>(), DOMDataError,
-        "SPKI import requires an ArrayBuffer.");
+    kj::ArrayPtr<const kj::byte> keyBytes =
+        JSG_REQUIRE_NONNULL(keyData.tryGet<kj::Array<kj::byte>>(), DOMDataError,
+            "SPKI import requires an ArrayBuffer.");
     const kj::byte* ptr = keyBytes.begin();
-    auto evpPkey = OSSLCALL_OWN(EVP_PKEY, d2i_PUBKEY(nullptr, &ptr, keyBytes.size()), DOMDataError,
-        "Invalid SPKI input.");
+    auto evpPkey = OSSLCALL_OWN(
+        EVP_PKEY, d2i_PUBKEY(nullptr, &ptr, keyBytes.size()), DOMDataError, "Invalid SPKI input.");
     if (ptr != keyBytes.end()) {
-      JSG_FAIL_REQUIRE(DOMDataError, "Invalid ", keyBytes.end() - ptr,
-          " trailing bytes after SPKI input.");
+      JSG_FAIL_REQUIRE(
+          DOMDataError, "Invalid ", keyBytes.end() - ptr, " trailing bytes after SPKI input.");
     }
 
     // usages must be empty for ECDH public keys, so use CryptoKeyUsageSet() when validating the
     // usage set.
-    usages =
-        CryptoKeyUsageSet::validate(normalizedName, CryptoKeyUsageSet::Context::importPublic,
-                                    keyUsages, allowedUsages & (normalizedName == "ECDH" ?
-                                    CryptoKeyUsageSet() : CryptoKeyUsageSet::publicKeyMask()));
-    return { kj::mv(evpPkey), KeyType::PUBLIC, usages };
+    usages = CryptoKeyUsageSet::validate(normalizedName, CryptoKeyUsageSet::Context::importPublic,
+        keyUsages,
+        allowedUsages &
+            (normalizedName == "ECDH" ? CryptoKeyUsageSet() : CryptoKeyUsageSet::publicKeyMask()));
+    return {kj::mv(evpPkey), KeyType::PUBLIC, usages};
   } else if (format == "pkcs8") {
-    kj::ArrayPtr<const kj::byte> keyBytes = JSG_REQUIRE_NONNULL(
-        keyData.tryGet<kj::Array<kj::byte>>(), DOMDataError,
-        "PKCS8 import requires an ArrayBuffer.");
+    kj::ArrayPtr<const kj::byte> keyBytes =
+        JSG_REQUIRE_NONNULL(keyData.tryGet<kj::Array<kj::byte>>(), DOMDataError,
+            "PKCS8 import requires an ArrayBuffer.");
     const kj::byte* ptr = keyBytes.begin();
     auto evpPkey = OSSLCALL_OWN(EVP_PKEY, d2i_AutoPrivateKey(nullptr, &ptr, keyBytes.size()),
         DOMDataError, "Invalid PKCS8 input.");
     if (ptr != keyBytes.end()) {
-      JSG_FAIL_REQUIRE(DOMDataError, "Invalid ", keyBytes.end() - ptr,
-          " trailing bytes after PKCS8 input.");
+      JSG_FAIL_REQUIRE(
+          DOMDataError, "Invalid ", keyBytes.end() - ptr, " trailing bytes after PKCS8 input.");
     }
-    usages =
-        CryptoKeyUsageSet::validate(normalizedName, CryptoKeyUsageSet::Context::importPrivate,
-                                    keyUsages, allowedUsages & CryptoKeyUsageSet::privateKeyMask());
-    return { kj::mv(evpPkey), KeyType::PRIVATE, usages };
+    usages = CryptoKeyUsageSet::validate(normalizedName, CryptoKeyUsageSet::Context::importPrivate,
+        keyUsages, allowedUsages & CryptoKeyUsageSet::privateKeyMask());
+    return {kj::mv(evpPkey), KeyType::PRIVATE, usages};
   } else {
     JSG_FAIL_REQUIRE(DOMNotSupportedError, "Unrecognized key import format \"", format, "\".");
   }

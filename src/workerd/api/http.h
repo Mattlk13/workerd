@@ -6,24 +6,21 @@
 
 #include <workerd/jsg/jsg.h>
 #include <workerd/jsg/async-context.h>
-#include <workerd/util/abortable.h>
 #include <kj/compat/http.h>
 #include <map>
 #include "basics.h"
 #include "cf-property.h"
-#include "streams.h"
+#include <workerd/api/streams/readable.h>
 #include "form-data.h"
 #include "web-socket.h"
-#include "url.h"
-#include "url-standard.h"
+#include <workerd/api/url.h>
+#include <workerd/api/url-standard.h>
 #include "blob.h"
 #include <workerd/io/compatibility-date.capnp.h>
 #include "worker-rpc.h"
 #include "queue.h"
 
 namespace workerd::api {
-
-struct QueueResponse;
 
 class Headers final: public jsg::Object {
 private:
@@ -256,7 +253,8 @@ public:
   // from any of the other source types, Body can create a new ReadableStream from the source, and
   // the POST will successfully retransmit.
   using Initializer = kj::OneOf<jsg::Ref<ReadableStream>, kj::String, kj::Array<byte>,
-                                jsg::Ref<Blob>, jsg::Ref<URLSearchParams>, jsg::Ref<FormData>>;
+                                jsg::Ref<Blob>, jsg::Ref<FormData>,
+                                jsg::Ref<URLSearchParams>, jsg::Ref<url::URLSearchParams>>;
 
   struct RefcountedBytes final: public kj::Refcounted {
     kj::Array<kj::byte> bytes;
@@ -297,7 +295,7 @@ public:
         : ownBytes(kj::refcounted<RefcountedBytes>(string.releaseArray().releaseAsBytes())),
           view([this] {
             auto bytesIncludingNull = ownBytes.get<kj::Own<RefcountedBytes>>()->bytes.asPtr();
-            return bytesIncludingNull.slice(0, bytesIncludingNull.size() - 1);
+            return bytesIncludingNull.first(bytesIncludingNull.size() - 1);
           }()) {}
     Buffer(jsg::Ref<Blob> blob)
         : ownBytes(kj::mv(blob)),
@@ -360,7 +358,7 @@ public:
 
   kj::Maybe<jsg::Ref<ReadableStream>> getBody();
   bool getBodyUsed();
-  jsg::Promise<kj::Array<byte>> arrayBuffer(jsg::Lock& js);
+  jsg::Promise<jsg::BufferSource> arrayBuffer(jsg::Lock& js);
   jsg::Promise<jsg::BufferSource> bytes(jsg::Lock& js);
   jsg::Promise<kj::String> text(jsg::Lock& js);
   jsg::Promise<jsg::Ref<FormData>> formData(jsg::Lock& js);
@@ -388,6 +386,7 @@ public:
     JSG_TS_OVERRIDE({
       json<T>(): Promise<T>;
       bytes(): Promise<Uint8Array>;
+      arrayBuffer(): Promise<ArrayBuffer>;
     });
     // Allow JSON body type to be specified
   }
@@ -505,7 +504,7 @@ public:
       jsg::Lock& js, kj::OneOf<jsg::Ref<Request>, kj::String> requestOrUrl,
       jsg::Optional<kj::OneOf<RequestInitializerDict, jsg::Ref<Request>>> requestInit);
 
-  using GetResult = kj::OneOf<jsg::Ref<ReadableStream>, kj::Array<byte>, kj::String, jsg::Value>;
+  using GetResult = kj::OneOf<jsg::Ref<ReadableStream>, jsg::BufferSource, kj::String, jsg::Value>;
 
   jsg::Promise<GetResult> get(jsg::Lock& js, kj::String url, jsg::Optional<kj::String> type);
 
@@ -602,7 +601,7 @@ public:
           ? Rpc.Provider<T, Reserved | "fetch" | "connect" | "queue" | "scheduled">
           : unknown
       ) & {
-        fetch(input: RequestInfo, init?: RequestInit): Promise<Response>;
+        fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
         connect(address: SocketAddress | string, options?: SocketOptions): Socket;
         queue(queueName: string, messages: ServiceBindingQueueMessage[]): Promise<FetcherQueueResult>;
         scheduled(options?: FetcherScheduledOptions): Promise<FetcherScheduledResult>;
@@ -616,7 +615,7 @@ public:
           ? Rpc.Provider<T, Reserved | "fetch" | "connect">
           : unknown
       ) & {
-        fetch(input: RequestInfo, init?: RequestInit): Promise<Response>;
+        fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
         connect(address: SocketAddress | string, options?: SocketOptions): Socket;
       });
     }
@@ -694,9 +693,10 @@ struct RequestInitializerDict {
   jsg::WontImplement credentials;
 
   // In browsers this controls the local browser cache. For Cloudflare Workers it could control the
-  // Cloudflare edge cache. Note that this setting is different from using the `Cache-Control`
-  // header since `Cache-Control` would be forwarded to the origin.
-  jsg::Unimplemented cache;
+  // Cloudflare edge cache. While the standard defines a number of values for this property, our
+  // implementation supports only three: undefined (identifying the default caching behavior that
+  // has been implemented by the runtime), "no-store", and "no-cache".
+  jsg::Optional<kj::String> cache;
 
   // These control how the `Referer` and `Origin` headers are initialized by the browser.
   // Browser-side JavaScript is normally not permitted to set these headers, because servers
@@ -753,11 +753,36 @@ struct RequestInitializerDict {
 
   JSG_STRUCT(method, headers, body, redirect, fetcher, cf, mode, credentials, cache,
              referrer, referrerPolicy, integrity, signal);
-  JSG_STRUCT_TS_OVERRIDE(RequestInit<Cf = CfProperties> {
-    headers?: HeadersInit;
-    body?: BodyInit | null;
-    cf?: Cf;
-  });
+  JSG_STRUCT_TS_OVERRIDE_DYNAMIC(CompatibilityFlags::Reader flags) {
+    if(flags.getCacheOptionEnabled()) {
+      if(flags.getCacheNoCache()) {
+        JSG_TS_OVERRIDE(RequestInit<Cf = CfProperties> {
+          headers?: HeadersInit;
+          body?: BodyInit | null;
+          cache?: 'no-store' | 'no-cache';
+          cf?: Cf;
+        });
+      } else {
+        JSG_TS_OVERRIDE(RequestInit<Cf = CfProperties> {
+          headers?: HeadersInit;
+          body?: BodyInit | null;
+          cache?: 'no-store';
+          cf?: Cf;
+        });
+      }
+    } else {
+      JSG_TS_OVERRIDE(RequestInit<Cf = CfProperties> {
+        headers?: HeadersInit;
+        body?: BodyInit | null;
+        cache?: never;
+        cf?: Cf;
+      });
+    }
+  }
+
+  // This method is called within tryUnwrap() when the type is unpacked from v8.
+  // See jsg Readme for more details.
+  void validate(jsg::Lock&);
 };
 
 class Request final: public Body {
@@ -769,13 +794,21 @@ public:
   };
   static kj::Maybe<Redirect> tryParseRedirect(kj::StringPtr redirect);
 
+  enum class CacheMode {
+    // CacheMode::NONE is set when cache is undefined. It represents the dafault cache
+    // mode that workers has supported.
+    NONE,
+    NOSTORE,
+    NOCACHE,
+  };
+
   Request(kj::HttpMethod method, kj::StringPtr url, Redirect redirect,
           jsg::Ref<Headers> headers, kj::Maybe<jsg::Ref<Fetcher>> fetcher,
           kj::Maybe<jsg::Ref<AbortSignal>> signal, CfProperty&& cf,
-          kj::Maybe<Body::ExtractedBody> body)
+          kj::Maybe<Body::ExtractedBody> body, CacheMode cacheMode = CacheMode::NONE)
     : Body(kj::mv(body), *headers), method(method), url(kj::str(url)),
       redirect(redirect), headers(kj::mv(headers)), fetcher(kj::mv(fetcher)),
-      cf(kj::mv(cf)) {
+      cacheMode(cacheMode), cf(kj::mv(cf)) {
     KJ_IF_SOME(s, signal) {
       // If the AbortSignal will never abort, assigning it to thisSignal instead ensures
       // that the cancel machinery is not used but the request.signal accessor will still
@@ -870,15 +903,8 @@ public:
   // TODO(conform): Won't implement?
 
   // The cache mode determines how HTTP cache is used with the request.
-  // We currently do not fully implement this. Currently we will explicitly
-  // throw in the Request constructor if the option is set. For the accessor
-  // we want it to always just return undefined while it is not implemented.
-  // The spec does not provide a value to indicate "unimplemented" and all
-  // of the other values would imply semantics we do not follow. In discussion
-  // with other implementers with the same issues, it was decided that
-  // simply returning undefined for these was the best option.
-  // jsg::JsValue getCache(jsg::Lock& js) { return js.v8Undefined(); }
-  // TODO(conform): Won't implement?
+  jsg::Optional<kj::StringPtr> getCache(jsg::Lock& js);
+  CacheMode getCacheMode();
 
   // We do not implement integrity checking at all. However, the spec says that
   // the default value should be an empty string. When the Request object is
@@ -890,7 +916,7 @@ public:
 
     JSG_METHOD(clone);
 
-    JSG_TS_DEFINE(type RequestInfo<CfHostMetadata = unknown, Cf = CfProperties<CfHostMetadata>> = Request<CfHostMetadata, Cf> | string | URL);
+    JSG_TS_DEFINE(type RequestInfo<CfHostMetadata = unknown, Cf = CfProperties<CfHostMetadata>> = Request<CfHostMetadata, Cf> | string);
     // All type aliases get inlined when exporting RTTI, but this type alias is included by
     // the official TypeScript types, so users might be depending on it.
 
@@ -908,15 +934,33 @@ public:
       // JSG_READONLY_PROTOTYPE_PROPERTY(duplex, getDuplex);
       // JSG_READONLY_PROTOTYPE_PROPERTY(mode, getMode);
       // JSG_READONLY_PROTOTYPE_PROPERTY(credentials, getCredentials);
-      // JSG_READONLY_PROTOTYPE_PROPERTY(cache, getCache);
       JSG_READONLY_PROTOTYPE_PROPERTY(integrity, getIntegrity);
       JSG_READONLY_PROTOTYPE_PROPERTY(keepalive, getKeepalive);
+      if(flags.getCacheOptionEnabled()) {
+        JSG_READONLY_PROTOTYPE_PROPERTY(cache, getCache);
+        if(flags.getCacheNoCache()) {
+          JSG_TS_OVERRIDE(<CfHostMetadata = unknown, Cf = CfProperties<CfHostMetadata>> {
+            constructor(input: RequestInfo<CfProperties> | URL, init?: RequestInit<Cf>);
+            clone(): Request<CfHostMetadata, Cf>;
+            cache?: "no-store" | "no-cache";
+            get cf(): Cf | undefined;
+          });
+        } else {
+          JSG_TS_OVERRIDE(<CfHostMetadata = unknown, Cf = CfProperties<CfHostMetadata>> {
+            constructor(input: RequestInfo<CfProperties> | URL, init?: RequestInit<Cf>);
+            clone(): Request<CfHostMetadata, Cf>;
+            cache?: "no-store";
+            get cf(): Cf | undefined;
+          });
+        }
+      } else {
+        JSG_TS_OVERRIDE(<CfHostMetadata = unknown, Cf = CfProperties<CfHostMetadata>> {
+          constructor(input: RequestInfo<CfProperties> | URL, init?: RequestInit<Cf>);
+          clone(): Request<CfHostMetadata, Cf>;
+          get cf(): Cf | undefined;
+        });
+      }
 
-      JSG_TS_OVERRIDE(<CfHostMetadata = unknown, Cf = CfProperties<CfHostMetadata>> {
-        constructor(input: RequestInfo<CfProperties>, init?: RequestInit<Cf>);
-        clone(): Request<CfHostMetadata, Cf>;
-        get cf(): Cf | undefined;
-      });
       // Use `RequestInfo` and `RequestInit` type aliases in constructor instead of inlining.
       // `CfProperties` is defined in `/types/defines/cf.d.ts`. We only really need a single `Cf`
       // type parameter here, but it would be a breaking type change to remove `CfHostMetadata`.
@@ -934,12 +978,11 @@ public:
       // JSG_READONLY_INSTANCE_PROPERTY(duplex, getDuplex);
       // JSG_READONLY_INSTANCE_PROPERTY(mode, getMode);
       // JSG_READONLY_INSTANCE_PROPERTY(credentials, getCredentials);
-      // JSG_READONLY_INSTANCE_PROPERTY(cache, getCache);
       JSG_READONLY_INSTANCE_PROPERTY(integrity, getIntegrity);
       JSG_READONLY_INSTANCE_PROPERTY(keepalive, getKeepalive);
 
       JSG_TS_OVERRIDE(<CfHostMetadata = unknown, Cf = CfProperties<CfHostMetadata>> {
-        constructor(input: RequestInfo<CfProperties>, init?: RequestInit<Cf>);
+        constructor(input: RequestInfo<CfProperties> | URL, init?: RequestInit<Cf>);
         clone(): Request<CfHostMetadata, Cf>;
         readonly cf?: Cf;
       });
@@ -971,6 +1014,8 @@ private:
   jsg::Ref<Headers> headers;
   kj::Maybe<jsg::Ref<Fetcher>> fetcher;
   kj::Maybe<jsg::Ref<AbortSignal>> signal;
+
+  CacheMode cacheMode = CacheMode::NONE;
 
   // The fetch spec definition of Request has a distinction between the "signal" (which is
   // an optional AbortSignal passed in with the options), and "this' signal", which is an

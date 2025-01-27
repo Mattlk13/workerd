@@ -5,21 +5,23 @@
 #pragma once
 
 #include "gpu-bindgroup-layout.h"
-#include <webgpu/webgpu_cpp.h>
+
 #include <workerd/jsg/jsg.h>
+
+#include <webgpu/webgpu_cpp.h>
 
 namespace workerd::api::gpu {
 
-class GPUPipelineLayout : public jsg::Object {
-public:
+class GPUPipelineLayout: public jsg::Object {
+ public:
   // Implicit cast operator to Dawn GPU object
   inline operator const wgpu::PipelineLayout&() const {
     return layout_;
   }
-  explicit GPUPipelineLayout(wgpu::PipelineLayout l) : layout_(kj::mv(l)){};
+  explicit GPUPipelineLayout(wgpu::PipelineLayout l): layout_(kj::mv(l)) {};
   JSG_RESOURCE_TYPE(GPUPipelineLayout) {}
 
-private:
+ private:
   wgpu::PipelineLayout layout_;
 };
 
@@ -32,4 +34,4 @@ struct GPUPipelineLayoutDescriptor {
 
 using GPUPipelineLayoutBase = kj::OneOf<jsg::NonCoercible<kj::String>, jsg::Ref<GPUPipelineLayout>>;
 
-} // namespace workerd::api::gpu
+}  // namespace workerd::api::gpu

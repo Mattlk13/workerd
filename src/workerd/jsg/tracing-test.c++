@@ -15,7 +15,7 @@ class NumberBoxHolder: public Object {
   // This differs from BoxBox (in jsg-test.h) in that this just holds the exact object you give
   // it, whereas BoxBox likes to create new objects.
 
-public:
+ public:
   explicit NumberBoxHolder(Ref<NumberBox> inner): inner(kj::mv(inner)) {}
 
   Ref<NumberBox> inner;
@@ -24,13 +24,15 @@ public:
     return jsg::alloc<NumberBoxHolder>(kj::mv(inner));
   }
 
-  Ref<NumberBox> getInner() { return inner.addRef(); }
+  Ref<NumberBox> getInner() {
+    return inner.addRef();
+  }
 
   JSG_RESOURCE_TYPE(NumberBoxHolder) {
     JSG_READONLY_PROTOTYPE_PROPERTY(inner, getInner);
   }
 
-private:
+ private:
   void visitForGc(GcVisitor& visitor) {
     visitor.visit(inner);
   }
@@ -40,16 +42,20 @@ class GcDetector: public jsg::Object {
   // Object which comes in pairs where one member of the pair can detect if the other has been
   // collected.
 
-public:
+ public:
   ~GcDetector() noexcept(false) {
     KJ_IF_SOME(s, sibling) s.sibling = kj::none;
   }
 
   kj::Maybe<GcDetector&> sibling;
 
-  bool getSiblingCollected() { return sibling == kj::none; }
+  bool getSiblingCollected() {
+    return sibling == kj::none;
+  }
 
-  bool touch() { return true; }
+  bool touch() {
+    return true;
+  }
 
   JSG_RESOURCE_TYPE(GcDetector) {
     // NOTE: Using an instance property instead of a prototype property causes V8 to refuse to
@@ -62,16 +68,18 @@ public:
 class GcDetectorBox: public jsg::Object {
   // Contains a GcDetector. Useful for testing tracing scenarios.
 
-public:
+ public:
   jsg::Ref<GcDetector> inner = jsg::alloc<GcDetector>();
 
-  jsg::Ref<GcDetector> getInner() { return inner.addRef(); }
+  jsg::Ref<GcDetector> getInner() {
+    return inner.addRef();
+  }
 
   JSG_RESOURCE_TYPE(GcDetectorBox) {
     JSG_READONLY_PROTOTYPE_PROPERTY(inner, getInner);
   }
 
-private:
+ private:
   void visitForGc(GcVisitor& visitor) {
     visitor.visit(inner);
   }
@@ -80,7 +88,7 @@ private:
 class ValueBox: public jsg::Object {
   // Contains an arbitrary value.
 
-public:
+ public:
   ValueBox(jsg::Value inner): inner(kj::mv(inner)) {}
 
   static jsg::Ref<ValueBox> constructor(jsg::Value inner) {
@@ -89,13 +97,15 @@ public:
 
   jsg::Value inner;
 
-  jsg::Value getInner(jsg::Lock& lock) { return inner.addRef(lock); }
+  jsg::Value getInner(jsg::Lock& lock) {
+    return inner.addRef(lock);
+  }
 
   JSG_RESOURCE_TYPE(ValueBox) {
     JSG_READONLY_PROTOTYPE_PROPERTY(inner, getInner);
   }
 
-private:
+ private:
   void visitForGc(GcVisitor& visitor) {
     visitor.visit(inner);
   }
@@ -145,8 +155,13 @@ struct TraceTestContext: public Object, public ContextGlobal {
   }
 };
 
-JSG_DECLARE_ISOLATE_TYPE(TraceTestIsolate, TraceTestContext, NumberBox,
-                         NumberBoxHolder, GcDetector, GcDetectorBox, ValueBox);
+JSG_DECLARE_ISOLATE_TYPE(TraceTestIsolate,
+    TraceTestContext,
+    NumberBox,
+    NumberBoxHolder,
+    GcDetector,
+    GcDetectorBox,
+    ValueBox);
 
 KJ_TEST("GC collects objects when expected") {
   Evaluator<TraceTestContext, TraceTestIsolate> e(v8System);
@@ -160,7 +175,8 @@ KJ_TEST("GC collects objects when expected") {
     a = null;
     gc();
     assert(b.siblingCollected, "full GC did not collect native objects");
-  )", "undefined", "undefined");
+  )",
+      "undefined", "undefined");
 
   // Test that a full GC can collect native cyclic objects.
   e.expectEval(R"(
@@ -174,7 +190,8 @@ KJ_TEST("GC collects objects when expected") {
     a = null;
     gc();
     assert(b.siblingCollected, "full GC did not collect cycles");
-  )", "undefined", "undefined");
+  )",
+      "undefined", "undefined");
 
   // Test that minor GC can collect native objects.
   e.expectEval(R"(
@@ -185,7 +202,8 @@ KJ_TEST("GC collects objects when expected") {
     a = null;
     gc({type: "minor"});
     assert(b.siblingCollected, "minor GC did not collect native objects");
-  )", "undefined", "undefined");
+  )",
+      "undefined", "undefined");
 
   // Test that minor GC does not collect native objects whose wrappers have been "modified".
   //
@@ -199,7 +217,8 @@ KJ_TEST("GC collects objects when expected") {
     a = null;
     gc({type: "minor"});
     assert(!b.siblingCollected, "minor GC collected modified native object");
-  )", "undefined", "undefined");
+  )",
+      "undefined", "undefined");
 
   // Test that minor GC collects a native object contained in another native object.
   e.expectEval(R"(
@@ -218,7 +237,8 @@ KJ_TEST("GC collects objects when expected") {
     a = null;
     gc({type: "minor"});
     assert(b.siblingCollected, "minor GC did not collect transitive native objects");
-  )", "undefined", "undefined");
+  )",
+      "undefined", "undefined");
 
   // Test that minor GC can collect unreachable jsg::Value.
   e.expectEval(R"(
@@ -243,7 +263,8 @@ KJ_TEST("GC collects objects when expected") {
     gc({type: "minor"});
 
     assert(b.siblingCollected, "minor GC did not collect jsg::Value");
-  )", "undefined", "undefined");
+  )",
+      "undefined", "undefined");
 }
 
 KJ_TEST("TracedReference usage does not lead to crashes") {
@@ -273,7 +294,8 @@ KJ_TEST("TracedReference usage does not lead to crashes") {
       "gc();\n"
 
       // Verify the value is still there...
-      "holder.inner.value", "number", "123");
+      "holder.inner.value",
+      "number", "123");
 }
 
 }  // namespace

@@ -8,12 +8,8 @@ const unitTests :Workerd.Config = (
           (name = "worker.py", pythonModule = embed "worker.py")
         ],
         compatibilityDate = "2024-01-15",
-        compatibilityFlags = ["python_workers"],
+        compatibilityFlags = [%PYTHON_FEATURE_FLAGS],
       )
     ),
   ],
-
-  autogates = [
-    "workerd-autogate-pyodide-load-external",
-  ]
 );

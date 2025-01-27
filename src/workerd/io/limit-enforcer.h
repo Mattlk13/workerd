@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <workerd/jsg/jsg.h>
 #include <workerd/io/observer.h>
+#include <workerd/jsg/jsg.h>
 
 namespace workerd {
 
@@ -17,8 +17,8 @@ static constexpr size_t DEFAULT_MAX_PBKDF2_ITERATIONS = 100'000;
 // Interface for an object that enforces resource limits on an Isolate level.
 //
 // See also LimitEnforcer, which enforces on a per-request level.
-class IsolateLimitEnforcer {
-public:
+class IsolateLimitEnforcer: public kj::Refcounted {
+ public:
   // Get CreateParams to pass when constructing a new isolate.
   virtual v8::Isolate::CreateParams getCreateParams() = 0;
 
@@ -86,8 +86,8 @@ public:
 };
 
 // Abstract interface that enforces resource limits on a IoContext.
-class LimitEnforcer  {
-public:
+class LimitEnforcer {
+ public:
   // Called just after taking the isolate lock, before executing JavaScript code, to enforce
   // limits on that code execution, particularly the CPU limit. The returned `Own<void>` should
   // be dropped when JavaScript is done, before unlocking the isolate.
@@ -98,8 +98,8 @@ public:
   // not be called while in a JS scope, i.e. when `enterJs()` has been called and the returned
   // object not yet dropped.
   virtual void topUpActor() = 0;
-  // TODO(cleanup): This is called in WebSocket when receiving a message, but should we do
-  //   something more generic like use a membrane to detect any incoming RPC call?
+  // TODO(cleanup): This is called in WebSocket and JsRpcTargetBase when receiving an event, but
+  // should we do something more generic like use a membrane to detect any incoming RPC call?
 
   // Called before starting a new subrequest. Throws a JSG exception if the limit has been
   // reached.
@@ -109,7 +109,7 @@ public:
   // external subrequests.
   virtual void newSubrequest(bool isInHouse) = 0;
 
-  enum class KvOpType { GET, PUT, LIST, DELETE };
+  enum class KvOpType { GET, GET_WITH, PUT, LIST, DELETE };
   // Called before starting a KV operation. Throws a JSG exception if the operation should be
   // blocked due to exceeding limits, such as the free tier daily operation limit.
   virtual void newKvRequest(KvOpType op) = 0;

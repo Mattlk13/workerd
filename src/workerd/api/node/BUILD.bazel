@@ -1,20 +1,71 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary")
 load("//:build/kj_test.bzl", "kj_test")
 load("//:build/wd_cc_library.bzl", "wd_cc_library")
 load("//:build/wd_test.bzl", "wd_test")
 
 wd_cc_library(
     name = "node",
-    srcs = glob(["**/*.c++"], exclude = ["**/*-test.c++"]),
-    hdrs = glob(["**/*.h"]),
+    srcs = [
+        "crypto.c++",
+        "crypto-keys.c++",
+        "diagnostics-channel.c++",
+        "dns.c++",
+        "timers.c++",
+        "zlib-util.c++",
+    ],
+    hdrs = [
+        "crypto.h",
+        "diagnostics-channel.h",
+        "dns.h",
+        "node.h",
+        "timers.h",
+        "zlib-util.h",
+    ],
     implementation_deps = [
+        "//src/rust/cxx-integration",
+        "//src/rust/dns",
+        "//src/workerd/io",
         "@capnp-cpp//src/kj/compat:kj-gzip",
-        "@simdutf",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":node-core",
+        "//src/node",
+        "@capnp-cpp//src/kj/compat:kj-brotli",
+    ],
+)
+
+# node source files that don't depend on io.
+wd_cc_library(
+    name = "node-core",
+    srcs = [
+        "async-hooks.c++",
+        "buffer.c++",
+        "i18n.c++",
+        "module.c++",
+        "url.c++",
+        "util.c++",
+    ],
+    hdrs = [
+        "async-hooks.h",
+        "buffer.h",
+        "buffer-string-search.h",
+        "i18n.h",
+        "module.h",
+        "url.h",
+        "util.h",
+    ],
+    implementation_deps = [
+        "@ada-url",
         "@nbytes",
+        "@simdutf",
     ],
     visibility = ["//visibility:public"],
     deps = [
         "//src/workerd/io",
-        "@capnp-cpp//src/kj/compat:kj-brotli",
+        "//src/workerd/io:compatibility-date_capnp",
+        "//src/workerd/jsg",
+        "//src/workerd/util:mimetype",
     ],
 )
 
@@ -23,10 +74,209 @@ kj_test(
     deps = ["//src/workerd/tests:test-fixture"],
 )
 
-[wd_test(
-    src = f,
+wd_test(
+    src = "tests/assert-test.wd-test",
     args = ["--experimental"],
-    data = [f.removesuffix(".wd-test") + ".js"],
-) for f in glob(
-    ["**/*.wd-test"],
-)]
+    data = ["tests/assert-test.js"],
+)
+
+wd_test(
+    size = "large",
+    src = "tests/buffer-nodejs-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/buffer-nodejs-test.js"],
+)
+
+wd_test(
+    size = "enormous",
+    src = "tests/crypto_dh-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/crypto_dh-test.js"],
+)
+
+wd_test(
+    src = "tests/crypto_hash-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/crypto_hash-test.js"],
+)
+
+wd_test(
+    src = "tests/crypto_hkdf-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/crypto_hkdf-test.js"],
+)
+
+wd_test(
+    src = "tests/crypto_hmac-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/crypto_hmac-test.js"],
+)
+
+wd_test(
+    src = "tests/crypto_keys-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/crypto_keys-test.js"],
+)
+
+wd_test(
+    src = "tests/crypto_pbkdf2-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/crypto_pbkdf2-test.js"],
+)
+
+wd_test(
+    src = "tests/crypto_random-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/crypto_random-test.js"],
+)
+
+wd_test(
+    size = "large",
+    src = "tests/crypto_scrypt-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/crypto_scrypt-test.js"],
+)
+
+wd_test(
+    src = "tests/crypto_spkac-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/crypto_spkac-test.js"],
+)
+
+wd_test(
+    src = "tests/crypto_x509-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/crypto_x509-test.js"],
+)
+
+wd_test(
+    src = "tests/diagnostics-channel-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/diagnostics-channel-test.js"],
+)
+
+wd_test(
+    src = "tests/mimetype-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/mimetype-test.js"],
+)
+
+wd_test(
+    src = "tests/node-compat-v2-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/node-compat-v2-test.js"],
+)
+
+wd_test(
+    src = "tests/path-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/path-test.js"],
+)
+
+wd_test(
+    size = "large",
+    src = "tests/streams-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/streams-test.js"],
+)
+
+wd_test(
+    src = "tests/string-decoder-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/string-decoder-test.js"],
+)
+
+wd_test(
+    src = "tests/url-nodejs-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/url-nodejs-test.js"],
+)
+
+wd_test(
+    src = "tests/util-nodejs-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/util-nodejs-test.js"],
+)
+
+wd_test(
+    src = "tests/sys-nodejs-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/sys-nodejs-test.js"],
+)
+
+wd_test(
+    size = "large",
+    src = "tests/zlib-nodejs-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/zlib-nodejs-test.js"],
+)
+
+wd_test(
+    src = "tests/module-create-require-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/module-create-require-test.js"],
+)
+
+wd_test(
+    src = "tests/process-exit-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/process-exit-test.js"],
+)
+
+wd_test(
+    src = "tests/process-nodejs-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/process-nodejs-test.js"],
+)
+
+wd_test(
+    src = "tests/querystring-nodejs-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/querystring-nodejs-test.js"],
+)
+
+config_setting(
+    name = "debug_build",
+    values = {"compilation_mode": "dbg"},
+)
+
+wd_test(
+    size = "large",
+    src = "tests/legacy_url-nodejs-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/legacy_url-nodejs-test.js"],
+    target_compatible_with = select({
+        ":debug_build": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+)
+
+wd_test(
+    src = "tests/dns-nodejs-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/dns-nodejs-test.js"],
+)
+
+js_binary(
+    name = "net-nodejs-tcp-server",
+    entry_point = "tests/net-nodejs-tcp-server.js",
+)
+
+wd_test(
+    size = "large",
+    src = "tests/net-nodejs-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/net-nodejs-test.js"],
+    sidecar = "net-nodejs-tcp-server",
+    target_compatible_with = select({
+        # TODO(soon): Investigate why this test timeout on Windows.
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+)
+
+wd_test(
+    src = "tests/timers-nodejs-test.wd-test",
+    args = ["--experimental"],
+    data = ["tests/timers-nodejs-test.js"],
+)

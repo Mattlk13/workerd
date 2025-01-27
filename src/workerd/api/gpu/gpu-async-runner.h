@@ -5,18 +5,20 @@
 
 #pragma once
 
-#include <kj/timer.h>
-#include <webgpu/webgpu_cpp.h>
 #include <workerd/io/io-context.h>
 #include <workerd/io/io-timers.h>
+
+#include <webgpu/webgpu_cpp.h>
+
+#include <kj/timer.h>
 
 namespace workerd::api::gpu {
 
 // AsyncRunner is used to poll a wgpu::Instance with calls to ProcessEvents() while there
 // are asynchronous tasks in flight.
-class AsyncRunner : public kj::Refcounted {
-public:
-  AsyncRunner(wgpu::Instance instance) : instance_(instance){};
+class AsyncRunner: public kj::Refcounted {
+ public:
+  AsyncRunner(wgpu::Instance instance): instance_(instance) {};
 
   // Begin() should be called when a new asynchronous task is started.
   // If the number of executing asynchronous tasks transitions from 0 to 1, then
@@ -29,7 +31,7 @@ public:
   // Every call to Begin() should eventually result in a call to End().
   void End();
 
-private:
+ private:
   void QueueTick();
   wgpu::Instance const instance_;
   uint64_t count_ = 0;
@@ -40,14 +42,16 @@ private:
 // AsyncTask is a RAII helper for calling AsyncRunner::Begin() on construction,
 // and AsyncRunner::End() on destruction, that also encapsulates the promise generally
 // associated with any async task.
-template <typename T> class AsyncContext : public kj::Refcounted {
-public:
+template <typename T>
+class AsyncContext: public kj::Refcounted {
+ public:
   inline AsyncContext(AsyncContext&&) = default;
 
   // Constructor.
   // Calls AsyncRunner::Begin()
   explicit inline AsyncContext(jsg::Lock& js, kj::Own<AsyncRunner> runner)
-      : promise_(nullptr), runner_(kj::mv(runner)) {
+      : promise_(nullptr),
+        runner_(kj::mv(runner)) {
     auto& context = IoContext::current();
     auto paf = kj::newPromiseAndFulfiller<T>();
     fulfiller_ = kj::mv(paf.fulfiller);
@@ -65,9 +69,9 @@ public:
   kj::Own<kj::PromiseFulfiller<T>> fulfiller_;
   jsg::Promise<T> promise_;
 
-private:
+ private:
   KJ_DISALLOW_COPY(AsyncContext);
   kj::Own<AsyncRunner> runner_;
 };
 
-} // namespace workerd::api::gpu
+}  // namespace workerd::api::gpu
